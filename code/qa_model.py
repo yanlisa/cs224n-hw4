@@ -393,6 +393,7 @@ class QASystem(object):
         actual_st, actual_end = zip(*samples[-1])
         par_lens = map(len, samples[0])
         guess_st, guess_end = self.answer(sess, samples[:-1])
+        # TODO: use f1_score, exact_match_score from evaluate.py!!
 
         macro = np.array([0., 0., 0., 0.])
         micro = np.array([0., 0., 0., 0., 0.])
@@ -435,8 +436,6 @@ class QASystem(object):
         data.append([acc, prec, rec, f1])
         # Macro average
         data.append(macro / float(sample))
-
-        # default average
         tp, fp, tn, fn, exact = default
         acc = (tp + tn)/(tp + tn + fp + fn) if tp > 0  else 0
         prec = (tp)/(tp + fp) if tp > 0  else 0
@@ -449,8 +448,9 @@ class QASystem(object):
         #return to_table(data, self.labels + ["micro","macro","not-O"], ["label", "acc", "prec", "rec", "f1"])
         print("total exact: %s" % exact)
 
-        if log:
-            logging.info("F1: {}, EM: {}, for {} samples".format(f1, em, sample))
+        #if log:
+        #logging.info("F1: {}, EM: {}, for {} samples".format(f1, em, sample))
+        print("F1: {}, EM: {}, for {} samples".format(f1, em, sample))
 
         return f1, em
 
@@ -501,7 +501,7 @@ class QASystem(object):
                 best_score = score
                 logger.info("New best score! Saving model in %s",
                         self.config.train_dir)
-                self.saver.save(sess, self.config.train_dir)
+		logger.info(self.saver.save(sess, self.config.train_dir))
     # Lisa
     # from assignment3/ner_model.py
     def run_epoch(self, sess, train_set, dev_set):
@@ -513,7 +513,12 @@ class QASystem(object):
             if i % print_every == 1:
                 logger.info("Current batch:{}/{}, loss: {}".format(
                     i, len(train_set), loss))
-                self.evaluate_answer(sess, train_set, log=True)
+                # logger.info("F1: {}, EM: {}".format(
+                f1, em = self.evaluate_answer(sess, train_set, log=True)
+                print("F1: {}, EM: {}, for {} samples".format(f1, em, 100))
+		# logger.info("hello world")
+                # print("F1: {}, EM: {}".format(
+                # 	self.evaluate_answer(sess, train_set, log=True)))
         print("")
         self.evaluate_answer(sess, train_set, log=True)
 

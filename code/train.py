@@ -131,8 +131,11 @@ def main(_):
     train_padded_q, train_mask_q = pad_sequences(train_q, max_len_q)
     val_padded_p, val_mask_p = pad_sequences(val_p, max_len_p)
     val_padded_q, val_mask_q = pad_sequences(val_q, max_len_q)
+    t_len = 100
     train_dataset = zip(train_padded_p, train_mask_p,
                     train_padded_q, train_mask_q, train_ans)
+    train_dataset = zip(train_padded_p[:t_len], train_mask_p[:t_len],
+                    train_padded_q[:t_len], train_mask_q[:t_len], train_ans[:t_len])
     val_dataset = zip(val_padded_p, val_mask_p,
                     val_padded_q, val_mask_q, val_ans)
     dataset = (train_dataset, val_dataset)
