@@ -1,0 +1,522 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+import time
+import logging
+
+import numpy as np
+from six.moves import xrange  # pylint: disable=redefined-builtin
+import tensorflow as tf
+from tensorflow.python.ops import variable_scope as vs
+from util import Progbar, minibatches, ConfusionMatrix
+
+from evaluate import exact_match_score, f1_score
+
+logger = logging.getLogger("qa_model")
+logging.basicConfig(level=logging.INFO)
+logging.basicConfig(format='%s(levelname)s:%s(message)s', level=logging.INFO)
+
+def get_optimizer(opt):
+    if opt == "adam":
+        optfn = tf.train.AdamOptimizer
+    elif opt == "sgd":
+        optfn = tf.train.GradientDescentOptimizer
+    else:
+        assert (False)
+    return optfn
+
+
+class Encoder(object):
+    def __init__(self, size, vocab_dim, max_len_p=-1,max_len_q=-1):
+        self.size = size # state size
+        self.para_size = size # hidden state size for paragraph
+        self.q_size = size # hidden state size for paragraph
+        self.vocab_dim = vocab_dim # input size
+        self.tf_cache = {}
+        self.max_len_p = max_len_p
+        self.max_len_q = max_len_q
+        # Create bidirectional lstm cell here.
+        # with tf.variable_scope("encode", reuse=True):
+        #     cell = tf.nn.rnn_cell.BasicLSTMCell(self.size,
+        #             state_is_tuple=True)
+
+        # initialize variables here?
+
+    def encode(self, inputs, masks, encoder_state_input, reuse=False):
+        """
+        In a generalized encode function, you pass in your inputs,
+        masks, and an initial
+        hidden state input into this function.
+
+        :param inputs: Symbolic representations of your input
+        :param masks: this is to make sure tf.nn.dynamic_rnn doesn't iterate
+                      through masked steps
+        :param encoder_state_input: (Optional) pass this as initial hidden state
+                                    to tf.nn.dynamic_rnn to build conditional representations
+        :return: an encoded representation of your input.
+                 It can be context-level representation, word-level representation,
+                 or both.
+        """
+        # initial_state_fw, initial_state_bw
+        # time_major=False: [batch_size, max_time, cell_fw.output_size]
+        cell = tf.nn.rnn_cell.BasicLSTMCell(self.size,
+                        state_is_tuple=True)
+        with tf.variable_scope("encode", reuse=reuse):
+            #tf.get_variable_scope().reuse_variables()
+            (fw, bw), _ = tf.nn.bidirectional_dynamic_rnn(cell, cell,
+                    inputs, sequence_length=masks, dtype=tf.float32)
+            rep = tf.concat(2, [fw, bw])
+
+        return rep
+
+    def attention(self, p_context, q_query):
+        # for each context word, figure out how q_query influences
+        xavier_initializer = tf.contrib.layers.xavier_initializer()
+        with tf.variable_scope("attention"):
+            #tf.get_variable_scope().reuse_variables()
+            W_a = tf.get_variable("W_a",
+                shape=(2*self.size, 2*self.size),
+                initializer=xavier_initializer)
+            W_b = tf.get_variable("W_b",
+                shape=(4*self.size, 2*self.size),
+                initializer=xavier_initializer)
+            # q * W_a
+            q_reshape = tf.reshape(q_query, [-1, 2*self.size])
+            scores = tf.matmul(q_reshape, W_a)
+            scores = tf.reshape(scores, [-1, self.max_len_q, 2*self.size])
+            # scores = p * (q * W_a)^T
+            # [batch_size, p_len, q_len] 
+            scores = tf.matmul(p_context, scores, transpose_b=True)
+            scores = tf.nn.softmax(scores) # normalize to 1
+
+            # \sum(scores * q)
+            # [batch_size, p_len, q_len, 1] 
+            scores_exp = tf.expand_dims(scores, 3)
+            # [batch_size, 1, q_len, 2d]
+            q_exp = tf.expand_dims(q_query, 1)
+            # [batch_size, p_len, q_len, 2d]
+            score_q = tf.mul(scores_exp, q_exp)
+            # [batch_size, p_len, 2d]
+            context_attn = tf.reduce_sum(score_q, 2)
+            
+            # [batch_size, p_len, 4d]
+            p_c = tf.concat(2, [context_attn, p_context])
+            # [batch_size, p_len, 2d]
+            # p_c_attn * W_b
+            p_c_reshape = tf.reshape(p_c, [-1, 4*self.size])
+            p_attn = tf.matmul(p_c_reshape, W_b)
+            p_attn = tf.reshape(p_attn, [-1, self.max_len_p, 2*self.size])
+        return p_attn
+
+class Decoder(object):
+    def __init__(self, output_size):
+        self.output_size = output_size
+        self.tf_cache = {}
+
+    def decode(self, knowledge_rep):
+        """
+        takes in a knowledge representation
+        and output a probability estimation over
+        all paragraph tokens on which token should be
+        the start of the answer span, and which should be
+        the end of the answer span.
+
+        :param knowledge_rep: it is a representation of the paragraph and question,
+                              decided by how you choose to implement the encoder
+        :return:
+        """
+
+        # 2 for either st or end
+        # time_major=False: [batch_size, max_time, 2]
+        cell = tf.nn.rnn_cell.BasicLSTMCell(2, state_is_tuple=True)
+        with tf.variable_scope("decode_st"):
+            xavier_initializer = tf.contrib.layers.xavier_initializer()
+            a_st_end, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,
+                    dtype=tf.float32)
+            # each of dim [batch_size, max_time, 1]
+            a_st, a_end = tf.unpack(a_st_end, axis=2)
+            print ("a_st", a_st.get_shape())
+
+            W_st = tf.Variable(xavier_initializer(
+                (self.output_size,self.output_size)),name="W_st")
+
+            W_end = tf.Variable(xavier_initializer(
+                (self.output_size,self.output_size)),name="W_end")
+            print("W_end", W_end.get_shape(), "a_end", a_end.get_shape())
+            self.y_st = tf.matmul(a_st, W_st)
+            self.y_end = tf.matmul(a_end, W_end)
+
+        return (self.y_st, self.y_end)
+
+class QASystem(object):
+    def __init__(self, encoder, decoder, *args):
+        """
+        Initializes your System
+
+        :param encoder: an encoder that you constructed in train.py
+        :param decoder: a decoder that you constructed in train.py
+        :param args: pass in more arguments as needed
+        """
+
+        self.saver = None
+        self.encoder = encoder
+        self.decoder = decoder
+        self.pretrained_embeddings = args[0]
+        self.max_len_p = args[1]
+        self.max_len_q = args[2]
+        self.max_len_ans = args[3]
+        self.config = args[4] # FLAGS in train.py
+        # ==== set up placeholder tokens ========
+        self.p_placeholder = tf.placeholder(tf.int32,
+                shape=(None,self.max_len_p))
+        self.mask_p_placeholder = tf.placeholder(tf.int32,
+                shape=(None,))
+        self.q_placeholder = tf.placeholder(tf.int32,
+                shape=(None,self.max_len_q))
+        self.mask_q_placeholder = tf.placeholder(tf.int32,
+                shape=(None,))
+        self.st_placeholder = tf.placeholder(tf.int32,
+                shape=(None,)) # dim 2
+        self.end_placeholder = tf.placeholder(tf.int32,
+                shape=(None,)) # dim 2
+        self.dropout_placeholder = tf.placeholder(tf.int32,
+                shape=())
+
+        # ==== assemble pieces ====
+        with tf.variable_scope("qa", initializer=tf.uniform_unit_scaling_initializer(1.0)):
+            self.setup_embeddings()
+            self.setup_system()
+            self.setup_loss()
+            self.setup_training()
+
+        # ==== set up training/updating procedure ====
+        pass
+
+
+    def setup_system(self):
+        """
+        After your modularized implementation of encoder and decoder
+        you should call various functions inside encoder, decoder here
+        to assemble your reading comprehension system!
+        :return:
+        """
+        # (None, max_len_p, hidden_size)
+        encode_p = self.encoder.encode(self.p_embeddings,
+                self.mask_p_placeholder, None)
+        print("encode_p", encode_p.get_shape())
+        encode_q = self.encoder.encode(self.q_embeddings,
+                self.mask_q_placeholder, None, reuse=True)
+
+        attn_p = self.encoder.attention(encode_p, encode_q)
+        print("attn_p", attn_p.get_shape())
+
+        # encoded p, attention p, and elt-wise mult of the two
+        encode_context = tf.concat(2, [attn_p, encode_p, attn_p * encode_p])
+        print("encode_context", encode_context.get_shape())
+
+        # [None,], [None,] (length is length of batch)
+        self.yp, self.yp2 = self.decoder.decode(encode_context) # start, end
+        print("self.yp", self.yp, self.yp2)
+
+
+    def setup_loss(self):
+        """
+        Set up your loss computation here
+        :return:
+        """
+        with vs.variable_scope("loss"):
+            print("placeholder size", self.st_placeholder.get_shape())
+            print("yp size", self.yp.get_shape())
+            batch_softmax_st = tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=self.st_placeholder, logits=self.yp)
+            batch_softmax_end = tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=self.end_placeholder, logits=self.yp2)
+            # print("len st and end", len(st_batch), len(end_batch), len(ans_batch))
+            self.loss = tf.reduce_mean(batch_softmax_st + batch_softmax_end)
+
+    def setup_training(self):
+        self.train_op = \
+            tf.train.AdamOptimizer(self.config.learning_rate).minimize(self.loss)
+
+    def setup_embeddings(self):
+        """
+        Loads distributed word representations based on placeholder tokens
+        :return:
+        """
+        with vs.variable_scope("embeddings"):
+            embeddings = tf.Variable(self.pretrained_embeddings,
+                    trainable=False, # ignore to make faster
+                    dtype=tf.float32)
+            self.p_embeddings = tf.nn.embedding_lookup(embeddings,
+                    self.p_placeholder)
+            # (None, max_len_p, embed.size)
+            print("p shape", self.p_placeholder.get_shape())
+            print("p embeddings shape", self.p_embeddings.get_shape())
+
+            self.q_embeddings = tf.nn.embedding_lookup(embeddings,
+                    self.q_placeholder)
+            # (None, max_len_p, embed.size)
+            print("q shape", self.q_placeholder.get_shape())
+            print("q embeddings shape", self.q_embeddings.get_shape())
+
+    def create_feed_dict(self, p_batch, mask_p_batch, q_batch, mask_q_batch, ans_batch=None, dropout=1):
+        input_feed = {}
+        input_feed[self.p_placeholder] = p_batch
+        input_feed[self.mask_p_placeholder] = mask_p_batch
+        input_feed[self.q_placeholder] = q_batch
+        input_feed[self.mask_q_placeholder] = mask_q_batch
+        if ans_batch is not None:
+            st_batch, end_batch = zip(*ans_batch)
+            input_feed[self.st_placeholder] = st_batch
+            input_feed[self.end_placeholder] = end_batch
+        dropout = 1 # TODO: change and move to train.py
+        input_feed[self.dropout_placeholder] = dropout
+        return input_feed
+
+    def optimize(self, sess, data):
+        """
+        Takes in actual data to optimize your model
+        This method is equivalent to a step() function
+        :return:
+        """
+        p_batch, mask_p_batch, q_batch, mask_q_batch, ans_batch = data
+        input_feed = self.create_feed_dict(p_batch, mask_p_batch,
+                q_batch, mask_q_batch, ans_batch=ans_batch)
+
+        output_feed = [self.train_op, self.loss] # Lisa
+
+        outputs = sess.run(output_feed, input_feed)
+        _, loss = outputs
+
+        return loss
+
+    def decode(self, sess, test_x):
+        """
+        Returns the probability distribution over different positions in the paragraph
+        so that other methods like self.answer() will be able to work properly
+        :return:
+        """
+        input_feed = {}
+        p_batch, mask_p_batch, q_batch, mask_q_batch = test_x
+        input_feed = self.create_feed_dict(p_batch, mask_p_batch,
+                q_batch, mask_q_batch)
+
+        # fill in this feed_dictionary like:
+        # input_feed['test_x'] = test_x
+
+        # output_feed = [self.train_op, self.loss]
+        # _, inds = sess.run(output_feed, input_feed)
+
+        output_feed = [self.decoder.y_st, self.decoder.y_end]
+        y_st, y_end = sess.run(output_feed, input_feed)
+
+        return y_st, y_end
+
+    def answer(self, sess, test_x):
+
+        yp, yp2 = self.decode(sess, test_x)
+
+        a_s = np.argmax(yp, axis=1)
+        a_e = np.argmax(yp2, axis=1)
+
+        return (a_s, a_e)
+
+    def test(self, sess, val_data):
+        """
+        in here you should compute a cost for your validation set
+        and tune your hyperparameters according to the validation set performance
+        :return:
+        """
+        input_feed = {}
+
+        # fill in this feed_dictionary like:
+        # input_feed['valid_x'] = valid_x
+        y_st, y_end = self.decode(sess, data[:-1])
+        st_batch, end_batch = zip(*data[-1])
+        # p_batch, mask_p_batch, q_batch, mask_q_batch, ans_batch = data
+        # input_feed = self.create_feed_dict(p_batch, mask_p_batch,
+        #         q_batch, mask_q_batch, ans_batch=ans_batch)
+        # output_feed = [self.decoder.y_st, self.decoder.y_end]
+        # y_st, y_end = sess.run(output_feed, input_feed)
+
+        return outputs
+
+    def validate(self, sess, valid_dataset):
+        """
+        Iterate through the validation dataset and determine what
+        the validation cost is.
+
+        This method calls self.test() which explicitly calculates validation cost.
+
+        How you implement this function is dependent on how you design
+        your data iteration function
+
+        :return:
+        """
+        valid_cost = 0
+
+        for valid_x, valid_y in valid_dataset:
+          valid_cost = self.test(sess, valid_x, valid_y)
+
+
+        return valid_cost
+
+    def evaluate_answer(self, sess, dataset, sample=100, log=False):
+        """
+        Evaluate the model's performance using the harmonic mean of F1 and Exact Match (EM)
+        with the set of true answer labels
+
+        This step actually takes quite some time. So we can only sample 100 examples
+        from either training or testing set.
+
+        :param sess: sess should always be centrally managed in train.py
+        :param dataset: a representation of our data, in some implementations, you can
+                        pass in multiple components (arguments) of one dataset to this function
+        :param sample: how many examples in dataset we look at
+        :param log: whether we print to std out stream
+        :return:
+        """
+
+        # tokens predicted
+        # correctly predicted
+        # tokens in actual
+        # precision: # true positives/(all predicted)
+        # recall: # true positives/(all correct)
+        # all correct = tp + fn
+        # all predicted = tp + fp
+        # tn we don't care about that much
+        f1 = 0.
+        em = 0.
+        # just want one "minibatch"
+        samples = minibatches(dataset, sample, shuffle=True).next()
+        actual_st, actual_end = zip(*samples[-1])
+        par_lens = map(len, samples[0])
+        guess_st, guess_end = self.answer(sess, samples[:-1])
+
+        macro = np.array([0., 0., 0., 0.])
+        micro = np.array([0., 0., 0., 0., 0.])
+        default = np.array([0., 0., 0., 0., 0.])
+        data = []
+        for i in range(sample):
+            # print("actual: %s, %s" % (actual_st[i], actual_end[i]))
+            # print("guess: %s, %s" % (guess_st[i], guess_end[i]))
+            act_range = np.arange(actual_st[i], actual_end[i]+1)
+            guess_range = np.arange(guess_st[i], guess_end[i]+1)
+            fp = len(np.setdiff1d(guess_range, act_range).tolist())
+            tp = max(len(guess_range) - fp, 0)
+            fn = len(np.setdiff1d(act_range, guess_range).tolist())
+            tn = max(par_lens[i] - len(guess_range), 0)
+            exact = len(guess_range) == len(act_range) and \
+                    fp == 0 and fn == 0 and \
+                    tp == len(act_range)
+
+            acc = (tp + tn)/(tp + tn + fp + fn) if tp > 0  else 0
+            prec = (tp)/(tp + fp) if tp > 0  else 0
+            rec = (tp)/(tp + fn) if tp > 0  else 0
+            f1 = 2 * prec * rec / (prec + rec) if tp > 0  else 0
+            # print("for this sample: acc %s, prec %s, rec %s, f1 %s, exact %s" % \
+            #         (acc, prec, rec, f1, int(exact)))
+
+            # update micro/macro averages
+            micro += np.array([tp, fp, tn, fn, int(exact)])
+            macro += np.array([acc, prec, rec, f1])
+            default += np.array([tp, fp, tn, fn, int(exact)])
+
+            data.append([acc, prec, rec, f1])
+
+        # micro average
+        tp, fp, tn, fn, exact = micro
+        acc = (tp + tn)/(tp + tn + fp + fn) if tp > 0  else 0
+        prec = (tp)/(tp + fp) if tp > 0  else 0
+        rec = (tp)/(tp + fn) if tp > 0  else 0
+        f1 = 2 * prec * rec / (prec + rec) if tp > 0  else 0
+        em = exact / float(sample)
+        data.append([acc, prec, rec, f1])
+        # Macro average
+        data.append(macro / float(sample))
+
+        # default average
+        tp, fp, tn, fn, exact = default
+        acc = (tp + tn)/(tp + tn + fp + fn) if tp > 0  else 0
+        prec = (tp)/(tp + fp) if tp > 0  else 0
+        rec = (tp)/(tp + fn) if tp > 0  else 0
+        f1 = 2 * prec * rec / (prec + rec) if tp > 0  else 0
+        em = exact / float(sample)
+        data.append([acc, prec, rec, f1])
+
+        # Macro and micro average.
+        #return to_table(data, self.labels + ["micro","macro","not-O"], ["label", "acc", "prec", "rec", "f1"])
+        print("total exact: %s" % exact)
+
+        if log:
+            logging.info("F1: {}, EM: {}, for {} samples".format(f1, em, sample))
+
+        return f1, em
+
+    def train(self, sess, dataset, train_dir):
+        """
+        Implement main training loop
+
+        TIPS:
+        You should also implement learning rate annealing (look into tf.train.exponential_decay)
+        Considering the long time to train, you should save your model per epoch.
+
+        More ambitious appoarch can include implement early stopping, or reload
+        previous models if they have higher performance than the current one
+
+        As suggested in the document, you should evaluate your training progress by
+        printing out information every fixed number of iterations.
+
+        We recommend you evaluate your model performance on F1 and EM instead of just
+        looking at the cost.
+
+        :param sess: it should be passed in from train.py
+        :param dataset: a representation of our data, in some implementations, you can
+                        pass in multiple components (arguments) of one dataset to this function
+        :param train_dir: path to the directory where you should save the model checkpoint
+        :return:
+        """
+
+        # some free code to print out number of parameters in your model
+        # it's always good to check!
+        # you will also want to save your model parameters in train_dir
+        # so that you can use your trained model to make predictions, or
+        # even continue training
+        self.saver = tf.train.Saver()
+
+        tic = time.time()
+        params = tf.trainable_variables()
+        num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
+        toc = time.time()
+        logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
+
+        # Lisa
+        best_score = 0.
+        train_set, val_set = dataset
+        for epoch in range(self.config.epochs):
+            logger.info("Epoch %d out of %d", epoch+1, self.config.epochs)
+            score = self.run_epoch(sess, train_set, val_set)
+            if score > best_score:
+                best_score = score
+                logger.info("New best score! Saving model in %s",
+                        self.config.train_dir)
+                self.saver.save(sess, self.config.train_dir)
+    # Lisa
+    # from assignment3/ner_model.py
+    def run_epoch(self, sess, train_set, dev_set):
+        prog = Progbar(target=1 + int(len(train_set) / self.config.batch_size))
+        print_every = 10
+        for i, batch in enumerate(minibatches(train_set, self.config.batch_size)):
+            loss = self.optimize(sess, batch)
+            prog.update(i + 1, [("train loss", loss)])
+            if i % print_every == 1:
+                logger.info("Current batch:{}/{}, loss: {}".format(
+                    i, len(train_set), loss))
+                self.evaluate_answer(sess, train_set, log=True)
+        print("")
+        self.evaluate_answer(sess, train_set, log=True)
+
+        # TODO: implement validation on dev set.
+        # from ner_model.py: self.evaluate(sess, dev_set)
+        # here: test() or validate()
