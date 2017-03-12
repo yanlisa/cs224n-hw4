@@ -434,3 +434,6 @@ def print_sentence(output, sentence, labels, predictions):
         output.write(token)
         output.write(" " * (spacing - len(token) + 1))
     output.write("\n")
+
+def get_substring(par, st, end):
+    return ' '.join(par[st:end+1])

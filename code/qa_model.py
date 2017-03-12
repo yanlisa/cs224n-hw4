@@ -9,7 +9,7 @@ import numpy as np
 from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
-from util import Progbar, minibatches, ConfusionMatrix
+from util import Progbar, minibatches, ConfusionMatrix, get_substring
 
 from evaluate import exact_match_score, f1_score
 
@@ -28,12 +28,14 @@ def get_optimizer(opt):
 
 
 class Encoder(object):
-    def __init__(self, size, vocab_dim, max_len_p=-1,max_len_q=-1):
+    def __init__(self, size, vocab_dim, flags=None, max_len_p=-1,max_len_q=-1):
         self.size = size # state size
         self.para_size = size # hidden state size for paragraph
         self.q_size = size # hidden state size for paragraph
         self.vocab_dim = vocab_dim # input size
         self.tf_cache = {}
+        if flags is not None:
+            self.config = flags
         self.max_len_p = max_len_p
         self.max_len_q = max_len_q
         # Create bidirectional lstm cell here.
@@ -62,18 +64,18 @@ class Encoder(object):
         # time_major=False: [batch_size, max_time, cell_fw.output_size]
         cell = tf.nn.rnn_cell.BasicLSTMCell(self.size,
                         state_is_tuple=True)
-        with tf.variable_scope("encode", reuse=reuse):
-            #tf.get_variable_scope().reuse_variables()
-            (fw, bw), _ = tf.nn.bidirectional_dynamic_rnn(cell, cell,
+        with tf.variable_scope("encode"):
+            if reuse:
+                tf.get_variable_scope().reuse_variables()
+            (fw, bw), out_tuple = tf.nn.bidirectional_dynamic_rnn(cell, cell,
                     inputs, sequence_length=masks, dtype=tf.float32)
-            rep = tf.concat(2, [fw, bw])
 
-        return rep
+        return [fw, bw], out_tuple
 
-    def attention(self, p_context, q_query):
+    def basic_attention(self, p_context, q_query):
         # for each context word, figure out how q_query influences
         xavier_initializer = tf.contrib.layers.xavier_initializer()
-        with tf.variable_scope("attention"):
+        with tf.variable_scope("basic_attention"):
             #tf.get_variable_scope().reuse_variables()
             W_a = tf.get_variable("W_a",
                 shape=(2*self.size, 2*self.size),
@@ -109,12 +111,66 @@ class Encoder(object):
             p_attn = tf.reshape(p_attn, [-1, self.max_len_p, 2*self.size])
         return p_attn
 
+    def mp_attention(self, p_context, q_query, q_out):
+        # for each context word, figure out how q_query influences
+        xavier_initializer = tf.contrib.layers.xavier_initializer()
+        p_fw, p_bw = p_context
+        q_fw, q_bw = q_query
+        print("tuple?",q_out)
+        out_q_fw, out_q_bw = q_out[0][1], q_out[1][1]
+        print("fw", out_q_fw)
+        print("bw", out_q_bw)
+        print("q_1 shape", out_q_fw.get_shape())
+        with tf.variable_scope("mp_attention"):
+            W_1 = tf.get_variable("W_1", # forward
+                    shape=(self.size, self.config.perspective_size),
+                    initializer=xavier_initializer)
+            W_2 = tf.get_variable("W_2", # backward
+                    shape=(self.size, self.config.perspective_size),
+                    initializer=xavier_initializer)
+            # [batch_size,state_size,perspective] 
+            q_fw_m = tf.mul(tf.expand_dims(out_q_fw, 2), W_1)
+            # [batch_size,max_p_len,state_size,perspective] 
+            q_fw_m = tf.expand_dims(q_fw_m, 1)
+            q_fw_m = tf.tile(q_fw_m, [1,self.config.output_size,1,1])
+            q_bw_m = tf.mul(tf.expand_dims(out_q_bw, 2), W_1)
+            q_fw_m = tf.expand_dims(q_bw_m, 1)
+            q_bw_m = tf.tile(q_fw_m, [1,self.config.output_size,1,1])
+            print("fw tile", q_fw_m.get_shape(), "bw tile", q_bw_m.get_shape())
+            p_fw_exp = tf.expand_dims(p_fw, 3)
+            p_bw_exp = tf.expand_dims(p_bw, 3)
+            W_1_exp = tf.expand_dims(W_1, 0)
+            W_1_exp = tf.expand_dims(W_1, 0)
+            print("W_1 shape", W_1_exp.get_shape())
+            print("p_fw shape", p_fw_exp.get_shape())
+            # [?,max_len,
+            p_fw_m = tf.mul(p_fw_exp, W_1_exp)
+            p_bw_m = tf.mul(p_bw_exp, W_1_exp)
+            print("p_fw_m shape", p_fw_m.get_shape())
+            
+            # cosine sims
+            m_fw = self.cosine_sim(p_fw_m, q_fw_m, dim=2)
+            m_bw = self.cosine_sim(p_bw_m, q_bw_m, dim=2)
+
+        return tf.concat(2, [m_fw, m_bw])
+
+    def cosine_sim(self, p, q, dim=2):
+        # normalize l2 wrt dim
+        p = tf.nn.l2_normalize(p, dim)
+        q = tf.nn.l2_normalize(q, dim)
+        m = tf.mul(p, q)
+        m = tf.reduce_sum(m,axis=2)
+        print("shape of cosine", m.get_shape())
+        return m
+
 class Decoder(object):
-    def __init__(self, output_size):
+    def __init__(self, output_size, flags=None):
         self.output_size = output_size
+        if flags is not None:
+            self.config = flags
         self.tf_cache = {}
 
-    def decode(self, knowledge_rep):
+    def basic_decode(self, knowledge_rep,masks=None):
         """
         takes in a knowledge representation
         and output a probability estimation over
@@ -130,24 +186,55 @@ class Decoder(object):
         # 2 for either st or end
         # time_major=False: [batch_size, max_time, 2]
         cell = tf.nn.rnn_cell.BasicLSTMCell(2, state_is_tuple=True)
-        with tf.variable_scope("decode_st"):
+        with tf.variable_scope("basic_decode"):
             xavier_initializer = tf.contrib.layers.xavier_initializer()
             a_st_end, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,
+                    sequence_length=masks,
                     dtype=tf.float32)
-            # each of dim [batch_size, max_time, 1]
+            # each of dim [batch_size, max_time(, 1)]
             a_st, a_end = tf.unpack(a_st_end, axis=2)
             print ("a_st", a_st.get_shape())
 
-            W_st = tf.Variable(xavier_initializer(
-                (self.output_size,self.output_size)),name="W_st")
+            W_st = tf.get_variable("W_st",
+                (self.output_size,self.output_size),
+                initializer=xavier_initializer)
+            b_st = tf.get_variable("b_st",
+                    shape=(self.output_size,),
+                    initializer=tf.constant_initializer(0))
 
-            W_end = tf.Variable(xavier_initializer(
-                (self.output_size,self.output_size)),name="W_end")
+            W_end = tf.get_variable("W_end",
+                (self.output_size,self.output_size),
+                initializer=xavier_initializer)
+            b_end = tf.get_variable("b_end",
+                    shape=(self.output_size,),
+                    initializer=tf.constant_initializer(0))
             print("W_end", W_end.get_shape(), "a_end", a_end.get_shape())
-            self.y_st = tf.matmul(a_st, W_st)
-            self.y_end = tf.matmul(a_end, W_end)
+            self.y_st = tf.matmul(a_st, W_st) + b_st
+            self.y_end = tf.matmul(a_end, W_end) + b_end
 
         return (self.y_st, self.y_end)
+
+    def mp_decode(self, knowledge_rep, masks=None):
+        cell = tf.nn.rnn_cell.BasicLSTMCell(self.config.state_size, state_is_tuple=True)
+        with tf.variable_scope("mp_aggregation"):
+            xavier_initializer = tf.contrib.layers.xavier_initializer()
+            aggr, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,
+                    sequence_length=masks,
+                    dtype=tf.float32)
+
+        with tf.variable_scope("mp_decode"):
+            W_st = tf.get_variable("W_st",
+                (self.config.state_size,),
+                initializer=xavier_initializer)
+
+            W_end = tf.get_variable("W_end",
+                (self.config.state_size,),
+                initializer=xavier_initializer)
+            self.y_st = tf.reduce_sum(tf.mul(aggr, W_st), 2)
+            self.y_end = tf.reduce_sum(tf.mul(aggr, W_end), 2)
+            print("y_st shape", self.y_st.get_shape())
+        return (self.y_st, self.y_end)
+        
 
 class QASystem(object):
     def __init__(self, encoder, decoder, *args):
@@ -182,6 +269,9 @@ class QASystem(object):
                 shape=(None,)) # dim 2
         self.dropout_placeholder = tf.placeholder(tf.int32,
                 shape=())
+        
+        self.use_basic = self.config.model_type == 0
+        self.use_mp = self.config.model_type == 1
 
         # ==== assemble pieces ====
         with tf.variable_scope("qa", initializer=tf.uniform_unit_scaling_initializer(1.0)):
@@ -202,21 +292,35 @@ class QASystem(object):
         :return:
         """
         # (None, max_len_p, hidden_size)
-        encode_p = self.encoder.encode(self.p_embeddings,
+        # returns tuple[fw, bw], not concatenated
+        encode_p, encode_out_p = self.encoder.encode(self.p_embeddings,
                 self.mask_p_placeholder, None)
-        print("encode_p", encode_p.get_shape())
-        encode_q = self.encoder.encode(self.q_embeddings,
+        encode_q, encode_out_q = self.encoder.encode(self.q_embeddings,
                 self.mask_q_placeholder, None, reuse=True)
+        if self.use_basic:
+            encode_p = tf.concat(2, encode_p)
+            encode_q = tf.concat(2, encode_q)
 
-        attn_p = self.encoder.attention(encode_p, encode_q)
+        if self.use_basic:
+            attn_p = self.encoder.basic_attention(encode_p, encode_q)
+        elif self.use_mp:
+            attn_p = self.encoder.mp_attention(encode_p, encode_q, encode_out_q)
         print("attn_p", attn_p.get_shape())
 
         # encoded p, attention p, and elt-wise mult of the two
-        encode_context = tf.concat(2, [attn_p, encode_p, attn_p * encode_p])
+        if self.use_basic:
+            encode_context = tf.concat(2, [attn_p, encode_p, attn_p * encode_p])
+        else:
+            encode_context = attn_p
         print("encode_context", encode_context.get_shape())
 
         # [None,], [None,] (length is length of batch)
-        self.yp, self.yp2 = self.decoder.decode(encode_context) # start, end
+        if self.use_basic:
+            self.yp, self.yp2 = self.decoder.decode(encode_context,
+                    masks=self.mask_p_placeholder) # start, end
+        elif self.use_mp:
+            self.yp, self.yp2 = self.decoder.mp_decode(encode_context,
+                    masks=self.mask_p_placeholder) # start, end
         print("self.yp", self.yp, self.yp2)
 
 
@@ -233,7 +337,7 @@ class QASystem(object):
             batch_softmax_end = tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=self.end_placeholder, logits=self.yp2)
             # print("len st and end", len(st_batch), len(end_batch), len(ans_batch))
-            self.loss = tf.reduce_mean(batch_softmax_st + batch_softmax_end)
+            self.loss = tf.reduce_sum(batch_softmax_st + batch_softmax_end)
 
     def setup_training(self):
         self.train_op = \
@@ -362,7 +466,7 @@ class QASystem(object):
 
         return valid_cost
 
-    def evaluate_answer(self, sess, dataset, sample=100, log=False):
+    def evaluate_answer(self, sess, dataset, train_set=True, sample=100, log=False):
         """
         Evaluate the model's performance using the harmonic mean of F1 and Exact Match (EM)
         with the set of true answer labels
@@ -389,12 +493,35 @@ class QASystem(object):
         f1 = 0.
         em = 0.
         # just want one "minibatch"
-        samples = minibatches(dataset, sample, shuffle=True).next()
+        raw_dataset = self.raw_train
+        if not train_set:
+            raw_dataset = self.raw_val
+        indices = np.arange(len(dataset))
+        np.random.shuffle(indices)
+        indices = indices[:sample]
+        samples = zip(*[dataset[i] for i in indices])
         actual_st, actual_end = zip(*samples[-1])
-        par_lens = map(len, samples[0])
+        text_samples = [raw_dataset[i] for i in indices]
+
         guess_st, guess_end = self.answer(sess, samples[:-1])
+        for i in range(sample):
+            raw_par = text_samples[i]
+            prediction = get_substring(text_samples[i],
+                    guess_st[i], guess_end[i])
+            actual = get_substring(text_samples[i],
+                    actual_st[i], actual_end[i])
+            #print("prediction:{}, actual:{}".format(prediction, actual))
+            f1 += f1_score(prediction, actual)
+            em += exact_match_score(prediction, actual)
+
+        avg_f1, avg_em = f1/float(sample), em/float(sample)
+        print("f1", avg_f1, "em", avg_em)
+        return avg_f1, avg_em
+            
+
         # TODO: use f1_score, exact_match_score from evaluate.py!!
 
+        par_lens = map(len, samples[0])
         macro = np.array([0., 0., 0., 0.])
         micro = np.array([0., 0., 0., 0., 0.])
         default = np.array([0., 0., 0., 0., 0.])
@@ -487,13 +614,18 @@ class QASystem(object):
 
         tic = time.time()
         params = tf.trainable_variables()
+        print("trainable variables", '\n'.join(
+            map(lambda var: '\t{}:{}'.format(var.name, var.get_shape()),
+            params)))
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
         toc = time.time()
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
 
         # Lisa
         best_score = 0.
-        train_set, val_set = dataset
+        train_set, val_set, raw_set = dataset
+        print("train_set", len(train_set))
+        self.raw_train, self.raw_val = raw_set
         for epoch in range(self.config.epochs):
             logger.info("Epoch %d out of %d", epoch+1, self.config.epochs)
             score = self.run_epoch(sess, train_set, val_set)
@@ -506,7 +638,7 @@ class QASystem(object):
     # from assignment3/ner_model.py
     def run_epoch(self, sess, train_set, dev_set):
         prog = Progbar(target=1 + int(len(train_set) / self.config.batch_size))
-        print_every = 10
+        print_every = 10 
         for i, batch in enumerate(minibatches(train_set, self.config.batch_size)):
             loss = self.optimize(sess, batch)
             prog.update(i + 1, [("train loss", loss)])

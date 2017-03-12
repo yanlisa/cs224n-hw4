@@ -25,6 +25,7 @@ tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("output_size", 750, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
+tf.app.flags.DEFINE_integer("perspective_size", 50, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
 tf.app.flags.DEFINE_string("load_train_dir", "", "Training directory to load model parameters from to resume training (default: {train_dir}).")
@@ -32,6 +33,7 @@ tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (
 tf.app.flags.DEFINE_string("optimizer", "adam", "adam / sgd")
 tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per print.")
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
+tf.app.flags.DEFINE_integer("model_type", 1, "basic: 0, multiperspective: 1")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 
@@ -84,6 +86,10 @@ def read_id_file(filepath):
     with open(filepath, 'r') as f:
         return map(lambda line: map(int, (line.strip()).split(' ')),
                 f.readlines())
+def read_raw_file(filepath):
+    with open(filepath, 'r') as f:
+        return map(lambda line: (line.strip()).split(' '),
+                f.readlines())
 
 # TODO:
 # also pads sequences so that they are constant length.
@@ -111,12 +117,14 @@ def main(_):
     dataset = None
     logger.info("Loading training...")
     train_p = read_id_file(os.path.join(FLAGS.data_dir, 'train.ids.context'))
+    raw_train_p = read_raw_file(os.path.join(FLAGS.data_dir, 'train.context'))
     train_q = read_id_file(os.path.join(FLAGS.data_dir, 'train.ids.question'))
     train_ans = read_id_file(os.path.join(FLAGS.data_dir, 'train.span'))
     logger.info("Done. Read %d contexts, %d questions, %d answers" % \
             (len(train_p), len(train_q), len(train_ans)))
     logger.info("Loading validation...")
     val_p = read_id_file(os.path.join(FLAGS.data_dir, 'val.ids.context'))
+    raw_val_p = read_raw_file(os.path.join(FLAGS.data_dir, 'val.context'))
     val_q = read_id_file(os.path.join(FLAGS.data_dir, 'val.ids.question'))
     val_ans = read_id_file(os.path.join(FLAGS.data_dir, 'val.span'))
     logger.info("Done. Read %d contexts, %d questions, %d answers" % \
@@ -138,7 +146,8 @@ def main(_):
                     train_padded_q[:t_len], train_mask_q[:t_len], train_ans[:t_len])
     val_dataset = zip(val_padded_p, val_mask_p,
                     val_padded_q, val_mask_q, val_ans)
-    dataset = (train_dataset, val_dataset)
+    raw_dataset = (raw_train_p, raw_val_p)
+    dataset = (train_dataset, val_dataset, raw_dataset)
     print("Sanity check on lengths: min %s, max %s" % \
             (lambda x: (min(x), max(x)))(map(len, train_padded_p)))
 
@@ -151,8 +160,9 @@ def main(_):
     print("glove dims", glove.shape)
 
     encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size,
+            flags=FLAGS,
             max_len_p=max_len_p, max_len_q=max_len_q)
-    decoder = Decoder(output_size=FLAGS.output_size)
+    decoder = Decoder(output_size=FLAGS.output_size, flags=FLAGS)
 
     qa = QASystem(encoder, decoder, glove, max_len_p, max_len_q,
             max_len_ans, FLAGS)
