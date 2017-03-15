@@ -140,10 +140,15 @@ def main(_):
     val_padded_p, val_mask_p = pad_sequences(val_p, max_len_p)
     val_padded_q, val_mask_q = pad_sequences(val_q, max_len_q)
     t_len = 100
+    t_len = -1
     train_dataset = zip(train_padded_p, train_mask_p,
                     train_padded_q, train_mask_q, train_ans)
-    train_dataset = zip(train_padded_p[:t_len], train_mask_p[:t_len],
-                    train_padded_q[:t_len], train_mask_q[:t_len], train_ans[:t_len])
+    if t_len != -1: # minibatch to check overfitting
+        train_dataset = zip(train_padded_p[:t_len], train_mask_p[:t_len],
+    	                train_padded_q[:t_len], train_mask_q[:t_len], train_ans[:t_len])
+    else: # regular version
+        train_dataset = zip(train_padded_p, train_mask_p,
+    	                train_padded_q, train_mask_q, train_ans)
     val_dataset = zip(val_padded_p, val_mask_p,
                     val_padded_q, val_mask_q, val_ans)
     raw_dataset = (raw_train_p, raw_val_p)
@@ -176,7 +181,9 @@ def main(_):
     with open(os.path.join(FLAGS.log_dir, "flags.json"), 'w') as fout:
         json.dump(FLAGS.__flags, fout)
 
-    with tf.Session() as sess:
+    tf_config = tf.ConfigProto()
+    tf_config.gpu_options.allow_growth = True
+    with tf.Session(config=tf_config) as sess:
         load_train_dir = get_normalized_train_dir(FLAGS.load_train_dir or FLAGS.train_dir)
         initialize_model(sess, qa, load_train_dir)
 

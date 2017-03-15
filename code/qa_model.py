@@ -183,13 +183,16 @@ class Encoder(object):
             p_fw_m = tf.mul(tf.expand_dims(p_fw, 3), W_3)
             p_bw_m = tf.mul(tf.expand_dims(p_bw, 3), W_4)
             # [batch_size, max_len_p, max_len_q, state_size, perspective]
-            q_fw_m = self.expand_and_tile(q_fw_m, 1, self.max_len_p)
+            #q_fw_m = self.expand_and_tile(q_fw_m, 1, self.max_len_p)
             q_bw_m = self.expand_and_tile(q_bw_m, 1, self.max_len_p)
-            p_fw_m = self.expand_and_tile(p_fw_m, 2, self.max_len_q)
+            #p_fw_m = self.expand_and_tile(p_fw_m, 2, self.max_len_q)
             p_bw_m = self.expand_and_tile(p_bw_m, 2, self.max_len_q)
 
             # cosine sims on state_size
-            m_fw = self.cosine_sim(p_fw_m, q_fw_m, dim=3)
+            #m_fw = self.cosine_sim(p_fw_m, q_fw_m, dim=3)
+            m_fw = self.cosine_sim_dense(p_fw_m, q_fw_m,
+                      [2, 
+           
             m_bw = self.cosine_sim(p_bw_m, q_bw_m, dim=3)
             # reduce max on max_q_len
             m_fw = tf.reduce_max(m_fw, 2)
@@ -203,11 +206,22 @@ class Encoder(object):
 
         return tf.concat(2, [full_m_fw, full_m_bw, max_m_fw, max_m_bw])
 
+    def cosine_sim_dense(self, p, q, transpose_p, transpose_q):
+        p_tr = tf.transpose(p, transpose_p)
+        p_tr = tf.nn.normalize(p_tr, dim=len(transpose_p)-1) # assumes last thing
+        q_tr = tf.transpose(q, transpose_q)
+        q_tr = tf.nn.normalize(q_tr, dim=len(transpose_q)-1) # assumes last thing
+        cosine_similarity = tf.matmul(p_tr, q_tr)
+        return cosine_similarity
+
+
+        
+
     def expand_and_tile(self, vector, axis, tile_num):
         vector = tf.expand_dims(vector, axis)
-        new_dims = [1] * len(vector.get_shape())
-        new_dims[axis] = tile_num
-        vector = tf.tile(vector, new_dims)
+        # new_dims = [1] * len(vector.get_shape())
+        # new_dims[axis] = tile_num
+        # vector = tf.tile(vector, new_dims)
         return vector
 
     def cosine_sim(self, p, q, dim=2):
@@ -408,7 +422,6 @@ class QASystem(object):
         """
         with vs.variable_scope("embeddings"):
             embeddings = tf.Variable(self.pretrained_embeddings,
-                    trainable=False, # ignore to make faster
                     dtype=tf.float32)
             self.p_embeddings = tf.nn.embedding_lookup(embeddings,
                     self.p_placeholder)
@@ -447,8 +460,8 @@ class QASystem(object):
                 q_batch, mask_q_batch, ans_batch=ans_batch)
 
         run_metadata = tf.RunMetadata()
-        run_metadata = tf.Print(run_metadata)
-        output_feed = [self.train_op, self.loss, run_metadata] # Lisa
+        #run_metadata = tf.Print(run_metadata, [run_metadata])
+        output_feed = [self.train_op, self.loss]
 
         outputs = sess.run(output_feed, input_feed,
                 options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE,
@@ -703,7 +716,7 @@ class QASystem(object):
     # from assignment3/ner_model.py
     def run_epoch(self, sess, train_set, dev_set):
         prog = Progbar(target=1 + int(len(train_set) / self.config.batch_size))
-        print_every = 10 
+        print_every = 100 
         for i, batch in enumerate(minibatches(train_set, self.config.batch_size)):
             loss = self.optimize(sess, batch)
             prog.update(i + 1, [("train loss", loss)])
