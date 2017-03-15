@@ -446,10 +446,17 @@ class QASystem(object):
         input_feed = self.create_feed_dict(p_batch, mask_p_batch,
                 q_batch, mask_q_batch, ans_batch=ans_batch)
 
-        output_feed = [self.train_op, self.loss] # Lisa
+        run_metadata = tf.RunMetadata()
+        run_metadata = tf.Print(run_metadata)
+        output_feed = [self.train_op, self.loss, run_metadata] # Lisa
 
-        outputs = sess.run(output_feed, input_feed)
+        outputs = sess.run(output_feed, input_feed,
+                options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE,
+                    output_partition_graphs=True),
+                run_metadata=run_metadata)
         _, loss = outputs
+        with open("runmeta.out", 'w') as f:
+            f.write(str(run_metadata))
 
         return loss
 
