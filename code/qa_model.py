@@ -143,75 +143,98 @@ class Encoder(object):
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         p_fw, p_bw = p_context
         q_fw, q_bw = q_query
+        # reshape and tile to begin with
+        # [batch_size, max_len_p, max_len_q,state_size] 
+        #p_fw_exp = tf.reshape(tf.tile(tf.expand_dims(p_fw, 
+        # u = tf.reshape(tf.tile(tf.expand_dims(u, 1), [1, M, 1, 1]), [N * M, JQ, 2 * d])
+        print("p_fw shape before attn", p_fw.get_shape())
+        print("q_fw shape before attn", q_fw.get_shape())
         out_q_fw, out_q_bw = q_out[0][1], q_out[1][1]
-        with tf.variable_scope("mp_fullcontext"):
-            W_1 = tf.get_variable("W_1", # forward
-                    shape=(self.size, self.config.perspective_size),
-                    initializer=xavier_initializer)
-            W_2 = tf.get_variable("W_2", # backward
-                    shape=(self.size, self.config.perspective_size),
-                    initializer=xavier_initializer)
-            # q * W [batch_size,state_size,perspective] 
-            # tile [batch_size,max_len_p,state_size,perspective] 
-            q_fw_m = tf.mul(tf.expand_dims(out_q_fw, 2), W_1)
-            q_bw_m = tf.mul(tf.expand_dims(out_q_bw, 2), W_1)
-            # q_fw_m = tf.expand_dims(q_fw_m, 1)
-            # q_fw_m = tf.tile(q_fw_m, [1,self.config.output_size,1,1])
-            q_fw_m = self.expand_and_tile(q_fw_m, 1, self.config.output_size)
-            q_bw_m = self.expand_and_tile(q_bw_m, 1, self.config.output_size)
+        # with tf.variable_scope("mp_fullcontext"):
+        #     W_1 = tf.get_variable("W_1", # forward
+        #             shape=(self.size, self.config.perspective_size),
+        #             initializer=xavier_initializer)
+        #     W_2 = tf.get_variable("W_2", # backward
+        #             shape=(self.size, self.config.perspective_size),
+        #             initializer=xavier_initializer)
+        #     # q * W [batch_size,state_size,perspective] 
+        #     # tile [batch_size,max_len_p,state_size,perspective] 
+        #     q_fw_m = tf.mul(tf.expand_dims(out_q_fw, 2), W_1)
+        #     q_bw_m = tf.mul(tf.expand_dims(out_q_bw, 2), W_1)
+        #     # q_fw_m = tf.expand_dims(q_fw_m, 1)
+        #     # q_fw_m = tf.tile(q_fw_m, [1,self.config.output_size,1,1])
+        #     q_fw_m = self.expand_and_tile(q_fw_m, 1, self.config.output_size)
+        #     q_bw_m = self.expand_and_tile(q_bw_m, 1, self.config.output_size)
 
-            # p * W
-            p_fw_m = tf.mul(tf.expand_dims(p_fw, 3), W_1)
-            p_bw_m = tf.mul(tf.expand_dims(p_bw, 3), W_1)
-            
-            # cosine sims
-            m_fw = self.cosine_sim(p_fw_m, q_fw_m, dim=2)
-            m_bw = self.cosine_sim(p_bw_m, q_bw_m, dim=2)
-            # [batch_size, max_len_p, perspective]
-            full_m_fw = m_fw
-            full_m_bw = m_bw
-        with tf.variable_scope("mp_maxcontext"):
-            # max pooling
-            W_3 = tf.get_variable("W_3", # forward
-                    shape=(self.size, self.config.perspective_size),
+        #     # p * W
+        #     p_fw_m = tf.mul(tf.expand_dims(p_fw, 3), W_1)
+        #     p_bw_m = tf.mul(tf.expand_dims(p_bw, 3), W_1)
+        #     
+        #     # cosine sims
+        #     m_fw = self.cosine_sim(p_fw_m, q_fw_m, dim=2)
+        #     m_bw = self.cosine_sim(p_bw_m, q_bw_m, dim=2)
+        #     # [batch_size, max_len_p, perspective]
+        #     full_m_fw = m_fw
+        #     full_m_bw = m_bw
+        # with tf.variable_scope("mp_maxcontext"):
+        #     # max pooling
+        #     W_3 = tf.get_variable("W_3", # forward
+        #             shape=(self.size, self.config.perspective_size),
+        #             initializer=xavier_initializer)
+        #     W_4 = tf.get_variable("W_4", # backward
+        #             shape=(self.size, self.config.perspective_size),
+        #             initializer=xavier_initializer)
+        #     q_fw_m = tf.mul(tf.expand_dims(q_fw, 3), W_3)
+        #     q_bw_m = tf.mul(tf.expand_dims(q_bw, 3), W_4)
+        #     p_fw_m = tf.mul(tf.expand_dims(p_fw, 3), W_3)
+        #     p_bw_m = tf.mul(tf.expand_dims(p_bw, 3), W_4)
+        #     # [batch_size, max_len_p, max_len_q, state_size, perspective]
+        #     q_fw_m = self.expand_and_tile(q_fw_m, 1, self.max_len_p)
+        #     q_bw_m = self.expand_and_tile(q_bw_m, 1, self.max_len_p)
+        #     p_fw_m = self.expand_and_tile(p_fw_m, 2, self.max_len_q)
+        #     p_bw_m = self.expand_and_tile(p_bw_m, 2, self.max_len_q)
+
+        #     # cosine sims on state_size
+        #     m_fw = self.cosine_sim(p_fw_m, q_fw_m, dim=3)
+        #     # m_fw = self.cosine_sim_dense(p_fw_m, q_fw_m)#,
+        #     #           #[0, 1, 3, 2], [0, 1, 3, 2])
+        #    
+        #     m_bw = self.cosine_sim(p_bw_m, q_bw_m, dim=3)
+        #     # reduce max on max_q_len
+        #     m_fw = tf.reduce_max(m_fw, 2)
+        #     m_bw = tf.reduce_max(m_bw, 2)
+        #     # [batch_size, max_len_p, perspective]
+        #     max_m_fw = m_fw
+        #     max_m_bw = m_bw
+        with tf.variable_scope("dumb"):
+            W_2 = tf.get_variable("W_5", # forward
+                    shape=(self.max_len_q, self.size),
                     initializer=xavier_initializer)
-            W_4 = tf.get_variable("W_4", # backward
-                    shape=(self.size, self.config.perspective_size),
-                    initializer=xavier_initializer)
-            q_fw_m = tf.mul(tf.expand_dims(q_fw, 3), W_3)
-            q_bw_m = tf.mul(tf.expand_dims(q_bw, 3), W_4)
-            p_fw_m = tf.mul(tf.expand_dims(p_fw, 3), W_3)
-            p_bw_m = tf.mul(tf.expand_dims(p_bw, 3), W_4)
-            # [batch_size, max_len_p, max_len_q, state_size, perspective]
-            #q_fw_m = self.expand_and_tile(q_fw_m, 1, self.max_len_p)
-            q_bw_m = self.expand_and_tile(q_bw_m, 1, self.max_len_p)
-            #p_fw_m = self.expand_and_tile(p_fw_m, 2, self.max_len_q)
-            p_bw_m = self.expand_and_tile(p_bw_m, 2, self.max_len_q)
+            g = tf.mul(q_fw, W_2)
+            g = tf.reduce_sum(g, 2)
+            g = tf.tile(tf.expand_dims(g, 1), [1, 750, 1])
+            q_fw_exp = g
+            g = tf.mul(q_bw, W_2)
+            g = tf.reduce_sum(g, 2)
+            g = tf.tile(tf.expand_dims(g, 1), [1, 750, 1])
+            q_bw_exp = g
+        full_m_fw = tf.concat(2, [p_fw, q_fw_exp])
+        full_m_bw = tf.concat(2, [p_bw, q_bw_exp])
+        
 
-            # cosine sims on state_size
-            #m_fw = self.cosine_sim(p_fw_m, q_fw_m, dim=3)
-            m_fw = self.cosine_sim_dense(p_fw_m, q_fw_m,
-                      [2, 
-           
-            m_bw = self.cosine_sim(p_bw_m, q_bw_m, dim=3)
-            # reduce max on max_q_len
-            m_fw = tf.reduce_max(m_fw, 2)
-            m_bw = tf.reduce_max(m_bw, 2)
-            # [batch_size, max_len_p, perspective]
-            max_m_fw = m_fw
-            max_m_bw = m_bw
+        # print("full context size fw", full_m_fw.get_shape())
+        # print("maxpool context fw  ", max_m_fw.get_shape())
 
-        print("full context size fw", full_m_fw.get_shape())
-        print("maxpool context fw  ", max_m_fw.get_shape())
-
+        return tf.concat(2, [full_m_fw, full_m_bw])
         return tf.concat(2, [full_m_fw, full_m_bw, max_m_fw, max_m_bw])
 
     def cosine_sim_dense(self, p, q, transpose_p, transpose_q):
         p_tr = tf.transpose(p, transpose_p)
-        p_tr = tf.nn.normalize(p_tr, dim=len(transpose_p)-1) # assumes last thing
+        p_tr = tf.nn.l2_normalize(p_tr, dim=len(transpose_p)-1) # assumes last thing
         q_tr = tf.transpose(q, transpose_q)
-        q_tr = tf.nn.normalize(q_tr, dim=len(transpose_q)-1) # assumes last thing
+        q_tr = tf.nn.l2_normalize(q_tr, dim=len(transpose_q)-1) # assumes last thing
         cosine_similarity = tf.matmul(p_tr, q_tr)
+        print("dense sim shape", cosine_similarity.get_shape())
         return cosine_similarity
 
 
@@ -422,7 +445,8 @@ class QASystem(object):
         """
         with vs.variable_scope("embeddings"):
             embeddings = tf.Variable(self.pretrained_embeddings,
-                    dtype=tf.float32)
+                    dtype=tf.float32,
+                    trainable=False)
             self.p_embeddings = tf.nn.embedding_lookup(embeddings,
                     self.p_placeholder)
             # (None, max_len_p, embed.size)
@@ -447,6 +471,7 @@ class QASystem(object):
             input_feed[self.end_placeholder] = end_batch
         dropout = 1 # TODO: change and move to train.py
         input_feed[self.dropout_placeholder] = dropout
+        print("input_feed_dict", len(input_feed), len(input_feed[self.p_placeholder]))
         return input_feed
 
     def optimize(self, sess, data):
@@ -706,6 +731,20 @@ class QASystem(object):
         self.raw_train, self.raw_val = raw_set
         for epoch in range(self.config.epochs):
             logger.info("Epoch %d out of %d", epoch+1, self.config.epochs)
+            g = tf.get_default_graph()
+            print("getting default operations")
+            def dim_calc(tfshape):
+                is_none = False
+                prod = 1
+                try:
+                    for s in tfshape.as_list():
+                        if s is None: is_none = True; continue
+                        prod *= s
+                    return str("(%s): %s" % (prod, tfshape.as_list()))
+                except:
+                    return str(tfshape)
+            for op in g.get_operations():
+                print(op.name, map(lambda v: dim_calc(v.get_shape()), op.outputs))
             score = self.run_epoch(sess, train_set, val_set)
             if score > best_score:
                 best_score = score
