@@ -171,6 +171,8 @@ def main(_):
 
     qa = QASystem(encoder, decoder, glove, max_len_p, max_len_q,
             max_len_ans, FLAGS)
+    # create saver
+    qa.saver = tf.train.Saver()
 
     if not os.path.exists(FLAGS.log_dir):
         os.makedirs(FLAGS.log_dir)

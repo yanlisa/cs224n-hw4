@@ -750,6 +750,10 @@ class QASystem(object):
                 best_score = score
                 logger.info("New best score! Saving model in %s",
                         self.config.train_dir)
+                if self.saver:
+                    self.saver.save(sess,
+                            os.path.join(self.config.train_dir,
+                                'model.weights'))
 		logger.info(self.saver.save(sess, self.config.train_dir))
     # Lisa
     # from assignment3/ner_model.py
