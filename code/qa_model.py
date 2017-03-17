@@ -331,6 +331,31 @@ class Decoder(object):
 
         return (self.y_st, self.y_end)
 
+    def mix_decode(self, knowledge_rep,masks=None):
+        # 2 for either st or end
+        xavier_initializer = tf.contrib.layers.xavier_initializer()
+        with tf.variable_scope("mix_decode_st"):
+            W_st = tf.get_variable("W_st",
+                (self.config.state_size,),
+                initializer=xavier_initializer)
+            print("W_st", W_st.get_shape(), "p", knowledge_rep.get_shape())
+            self.y_st = tf.reduce_sum(tf.mul(knowledge_rep, W_st), 2)
+
+        cell = tf.nn.rnn_cell.BasicLSTMCell(self.config.state_size,
+                state_is_tuple=True)
+        with tf.variable_scope("mix_decode_end"):
+            a_end, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,
+                    sequence_length=masks,
+                    dtype=tf.float32)
+            # each of dim [batch_size, max_time, output_size)]
+            W_end = tf.get_variable("W_end",
+                (self.config.state_size,),
+                initializer=xavier_initializer)
+            print("W_end", W_end.get_shape(), "a_end", a_end.get_shape())
+            self.y_end = tf.reduce_sum(tf.mul(a_end, W_end), 2)
+
+        return (self.y_st, self.y_end)
+
     def mp_decode(self, knowledge_rep, masks=None):
         cell = tf.nn.rnn_cell.BasicLSTMCell(self.config.state_size, state_is_tuple=True)
         with tf.variable_scope("mp_aggregation"):
@@ -445,7 +470,7 @@ class QASystem(object):
             self.yp, self.yp2 = self.decoder.mp_decode(encode_context,
                     masks=self.mask_p_placeholder) # start, end
         elif self.use_mix:
-            self.yp, self.yp2 = self.decoder.basic_decode(encode_context,
+            self.yp, self.yp2 = self.decoder.mix_decode(encode_context,
                     masks=self.mask_p_placeholder) # start, end
         print("self.yp", self.yp, self.yp2)
 
