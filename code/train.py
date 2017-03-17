@@ -36,6 +36,8 @@ tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicate
 tf.app.flags.DEFINE_integer("model_type", 2, "basic: 0, multiperspective: 1, mix: 2")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
+tf.app.flags.DEFINE_boolean("clip_gradients",True, "Clip gradients")
+tf.app.flags.DEFINE_float("max_grad_norm", 10., "max grad to clip to")
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -141,14 +143,13 @@ def main(_):
     val_padded_q, val_mask_q = pad_sequences(val_q, max_len_q)
     t_len = 100
     #t_len = -1
-    train_dataset = zip(train_padded_p, train_mask_p,
-                    train_padded_q, train_mask_q, train_ans)
     if t_len != -1: # minibatch to check overfitting
         train_dataset = zip(train_padded_p[:t_len], train_mask_p[:t_len],
     	                train_padded_q[:t_len], train_mask_q[:t_len], train_ans[:t_len])
     else: # regular version
         train_dataset = zip(train_padded_p, train_mask_p,
     	                train_padded_q, train_mask_q, train_ans)
+    FLAGS.num_iters = len(train_dataset)
     val_dataset = zip(val_padded_p, val_mask_p,
                     val_padded_q, val_mask_q, val_ans)
     raw_dataset = (raw_train_p, raw_val_p)
@@ -193,7 +194,7 @@ def main(_):
         qa.train(sess, dataset, save_train_dir)
 
         #qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
-        f1, em = self.evaluate_answer(sess, train_set, log=True)
+        f1, em = qa.evaluate_answer(sess, train_set, log=True)
         print("final evaluation: F1: {}, EM: {}".format(f1, em))
 
 if __name__ == "__main__":

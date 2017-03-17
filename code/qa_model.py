@@ -491,8 +491,35 @@ class QASystem(object):
             self.loss = tf.reduce_sum(batch_softmax_st + batch_softmax_end)
 
     def setup_training(self):
-        self.train_op = \
-            tf.train.AdamOptimizer(self.config.learning_rate).minimize(self.loss)
+        # self.train_op = \
+        #     tf.train.AdamOptimizer(self.config.learning_rate).minimize(self.loss)
+        with tf.variable_scope("minimize_step"):
+            self.global_step = tf.get_variable("global_step",
+                    0, trainable=False)
+            epoch_size = self.config.num_iters / float(self.config.batch_size)
+            self.lr_exp = tf.train.exponential_decay(
+			    self.config.learning_rate,                # Base learning rate.
+			    self.global_step,  # Current index into the dataset.
+			    2 * epoch_size,          # Decay step. (every two epochs)
+			    0.95,                # Decay rate.
+			    staircase=True)
+        optimizer_type = \
+                get_optimizer(self.config.optimizer)
+        # TODO: NOT DECAYING LEARNING RATE BC ADAM OPTIMIZER
+        #optimizer = optimizer_type(self.lr_exp)
+        optimizer = optimizer_type(self.config.learning_rate)
+        grads_and_vars = optimizer.compute_gradients(self.loss)
+
+        if self.config.clip_gradients:
+            grads, and_vars = zip(*grads_and_vars)
+            grads, _ = \
+                    tf.clip_by_global_norm(grads,
+                            self.config.max_grad_norm)
+            grads_and_vars = zip(grads, and_vars)
+
+        self.grad_norm = tf.global_norm(grads_and_vars)
+        self.train_op = optimizer.apply_gradients(grads_and_vars)
+                #global_step=self.global_step)
 
     def setup_embeddings(self):
         """
