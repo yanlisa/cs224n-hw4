@@ -749,13 +749,13 @@ class QASystem(object):
             score = self.run_epoch(sess, train_set, val_set)
             if score > best_score:
                 best_score = score
-                logger.info("New best score! Saving model in %s",
-                        self.config.train_dir)
+                logger.info("New best score!")
                 if self.saver:
+                    logger.info("Saving model in {}".format(
+                        self.config.train_dir))
                     self.saver.save(sess,
                             os.path.join(self.config.train_dir,
                                 'model.weights'))
-		logger.info(self.saver.save(sess, self.config.train_dir))
     # Lisa
     # from assignment3/ner_model.py
     def run_epoch(self, sess, train_set, dev_set):
