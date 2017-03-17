@@ -483,10 +483,19 @@ class QASystem(object):
         with vs.variable_scope("loss"):
             print("placeholder size", self.st_placeholder.get_shape())
             print("yp size", self.yp.get_shape())
+            self.st_inds = tf.Print(self.st_placeholder, [self.st_placeholder],
+                          message="expected starts")
+            self.yp = tf.Print(self.yp, [tf.argmax(self.yp, 1)],
+                          message="guessed starts")
             batch_softmax_st = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=self.st_placeholder, logits=self.yp)
+                labels=self.st_inds, logits=self.yp)
+
+            self.end_inds = tf.Print(self.end_placeholder, [self.end_placeholder],
+                          message="expected starts")
+            self.yp2 = tf.Print(self.yp2, [tf.argmax(self.yp2, 1)],
+                          message="guessed starts")
             batch_softmax_end = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=self.end_placeholder, logits=self.yp2)
+                labels=self.end_inds, logits=self.yp2)
             # print("len st and end", len(st_batch), len(end_batch), len(ans_batch))
             # Lisa: changed 3/17 to sum of average losses from each of these
             self.loss = tf.reduce_mean(batch_softmax_st + batch_softmax_end)
@@ -844,7 +853,7 @@ class QASystem(object):
     # from assignment3/ner_model.py
     def run_epoch(self, sess, train_set, dev_set):
         prog = Progbar(target=1 + int(len(train_set) / self.config.batch_size))
-        print_every = 100 
+        print_every = 50 
         for i, batch in enumerate(minibatches(train_set, self.config.batch_size)):
             loss = self.optimize(sess, batch)
             prog.update(i + 1, [("train loss", loss)])
@@ -857,6 +866,12 @@ class QASystem(object):
 		# logger.info("hello world")
                 # print("F1: {}, EM: {}".format(
                 # 	self.evaluate_answer(sess, train_set, log=True)))
+            if self.saver:
+                logger.info("Saving model in {}".format(
+                    self.config.train_dir))
+                self.saver.save(sess,
+                        os.path.join(self.config.train_dir,
+                            'model.weights'))
         print("")
         f1, em = self.evaluate_answer(sess, train_set, log=True)
         print("After epoch: F1: {}, EM: {}, for {} samples".format(f1, em, 100))

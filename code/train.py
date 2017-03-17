@@ -20,10 +20,10 @@ logging.basicConfig(format='%s(levelname)s:%s(message)s', level=logging.INFO)
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
+tf.app.flags.DEFINE_integer("batch_size", 100, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
-tf.app.flags.DEFINE_integer("output_size", 750, "The output size of your model.")
+tf.app.flags.DEFINE_integer("output_size", 500, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_integer("perspective_size", 50, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
@@ -111,6 +111,15 @@ def pad_sequences(data, max_length):
                                         'constant'),
                         range(len(pad_lens)))
     return pad_sentences, seq_lens
+
+def truncate_answers(ans_tups, max_length):
+    max_ind = max_length - 1
+    new_ans = map(lambda (st, end): [min(st, max_ind), min(end, max_ind)],
+                  ans_tups)
+    for i, tup in enumerate(ans_tups):
+        if tup != new_ans[i]:
+            print("changed ({}): old: {}, new: {}".format(i, tup, new_ans[i]))
+    return new_ans
 # End Lisa functions
 
 def main(_):
@@ -139,10 +148,12 @@ def main(_):
     print("Padding training and validation data...")
     train_padded_p, train_mask_p = pad_sequences(train_p, max_len_p)
     train_padded_q, train_mask_q = pad_sequences(train_q, max_len_q)
+    train_ans = truncate_answers(train_ans, max_len_p)
     val_padded_p, val_mask_p = pad_sequences(val_p, max_len_p)
     val_padded_q, val_mask_q = pad_sequences(val_q, max_len_q)
+    val_ans = truncate_answers(val_ans, max_len_p)
     t_len = 100
-    #t_len = -1
+    t_len = -1
     if t_len != -1: # minibatch to check overfitting
         train_dataset = zip(train_padded_p[:t_len], train_mask_p[:t_len],
     	                train_padded_q[:t_len], train_mask_q[:t_len], train_ans[:t_len])
