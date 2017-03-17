@@ -488,7 +488,8 @@ class QASystem(object):
             batch_softmax_end = tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=self.end_placeholder, logits=self.yp2)
             # print("len st and end", len(st_batch), len(end_batch), len(ans_batch))
-            self.loss = tf.reduce_sum(batch_softmax_st + batch_softmax_end)
+            # Lisa: changed 3/17 to sum of average losses from each of these
+            self.loss = tf.reduce_mean(batch_softmax_st + batch_softmax_end)
 
     def setup_training(self):
         # self.train_op = \
