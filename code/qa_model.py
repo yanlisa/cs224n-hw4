@@ -773,8 +773,10 @@ class QASystem(object):
                 # print("F1: {}, EM: {}".format(
                 # 	self.evaluate_answer(sess, train_set, log=True)))
         print("")
-        self.evaluate_answer(sess, train_set, log=True)
+        f1, em = self.evaluate_answer(sess, train_set, log=True)
+        print("After epoch: F1: {}, EM: {}, for {} samples".format(f1, em, 100))
 
         # TODO: implement validation on dev set.
         # from ner_model.py: self.evaluate(sess, dev_set)
         # here: test() or validate()
+        return f1
