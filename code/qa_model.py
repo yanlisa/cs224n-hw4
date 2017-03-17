@@ -139,6 +139,29 @@ class Encoder(object):
             p_attn = tf.reshape(p_attn, [-1, self.max_len_p, 2*self.size])
         return p_attn
 
+    def mix_attention(self, p_context, q_query):
+        # p_context and q_query are simple concats of fw and bw, so
+        # they are 2*self.size in dimension
+        # p q^t = [?,p_len,200] * [?, 200, q_len] = [?, p_len, q_len]
+        a = tf.nn.softmax(tf.batch_matmul(p_context,
+                                    tf.transpose(q_query, [0, 2, 1])))
+        # a q = [?, p_len, 200]
+        p_mix = tf.batch_matmul(a, q_query)
+
+        xavier_initializer = tf.contrib.layers.xavier_initializer()
+        with tf.variable_scope("mix_attention"):
+            W_1 = tf.get_variable("W_1",
+                shape=(4*self.size, self.size),
+                initializer=xavier_initializer)
+            b_1 = tf.get_variable("b_1",
+                    shape=(self.size,),
+                    initializer=tf.constant_initializer(0))
+            cc_rs = tf.reshape(tf.concat(2, [p_context, p_mix]),
+                                [-1, 4*self.size])
+            cc_rs_W = tf.matmul(cc_rs, W_1)
+            p_attn = tf.reshape(cc_rs_W, [-1, self.max_len_p, self.size]) + b_1
+        return p_attn
+
     def mp_attention(self, p_context, q_query, q_out):
         # for each context word, figure out how q_query influences
         xavier_initializer = tf.contrib.layers.xavier_initializer()
@@ -366,6 +389,7 @@ class QASystem(object):
         
         self.use_basic = self.config.model_type == 0
         self.use_mp = self.config.model_type == 1
+        self.use_mix = self.config.model_type == 2
 
         # ==== assemble pieces ====
         with tf.variable_scope("qa", initializer=tf.uniform_unit_scaling_initializer(1.0)):
@@ -393,7 +417,7 @@ class QASystem(object):
                 self.mask_p_placeholder, None)
         encode_q, encode_out_q = self.encoder.encode(self.q_embeddings,
                 self.mask_q_placeholder, None, reuse=True)
-        if self.use_basic:
+        if self.use_basic or self.use_mix:
             encode_p = tf.concat(2, encode_p)
             encode_q = tf.concat(2, encode_q)
 
@@ -401,6 +425,8 @@ class QASystem(object):
             attn_p = self.encoder.basic_attention(encode_p, encode_q)
         elif self.use_mp:
             attn_p = self.encoder.mp_attention(encode_p, encode_q, encode_out_q)
+        elif self.use_mix:
+            attn_p = self.encoder.mix_attention(encode_p, encode_q)
         print("attn_p", attn_p.get_shape())
 
         # encoded p, attention p, and elt-wise mult of the two
@@ -409,13 +435,17 @@ class QASystem(object):
         else:
             encode_context = attn_p
         print("encode_context", encode_context.get_shape())
+        print("mask_p_placeholder", self.mask_p_placeholder.get_shape())
 
         # [None,], [None,] (length is length of batch)
         if self.use_basic:
-            self.yp, self.yp2 = self.decoder.decode(encode_context,
+            self.yp, self.yp2 = self.decoder.basic_decode(encode_context,
                     masks=self.mask_p_placeholder) # start, end
         elif self.use_mp:
             self.yp, self.yp2 = self.decoder.mp_decode(encode_context,
+                    masks=self.mask_p_placeholder) # start, end
+        elif self.use_mix:
+            self.yp, self.yp2 = self.decoder.basic_decode(encode_context,
                     masks=self.mask_p_placeholder) # start, end
         print("self.yp", self.yp, self.yp2)
 
@@ -744,8 +774,9 @@ class QASystem(object):
                     return str("(%s): %s" % (prod, tfshape.as_list()))
                 except:
                     return str(tfshape)
-            for op in g.get_operations():
-                print(op.name, map(lambda v: dim_calc(v.get_shape()), op.outputs))
+            if epoch == 0: # only for first epoch
+                for op in g.get_operations():
+                    print(op.name, map(lambda v: dim_calc(v.get_shape()), op.outputs))
             score = self.run_epoch(sess, train_set, val_set)
             if score > best_score:
                 best_score = score
