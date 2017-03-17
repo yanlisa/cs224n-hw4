@@ -140,7 +140,7 @@ def main(_):
     val_padded_p, val_mask_p = pad_sequences(val_p, max_len_p)
     val_padded_q, val_mask_q = pad_sequences(val_q, max_len_q)
     t_len = 100
-    t_len = -1
+    #t_len = -1
     train_dataset = zip(train_padded_p, train_mask_p,
                     train_padded_q, train_mask_q, train_ans)
     if t_len != -1: # minibatch to check overfitting
@@ -192,7 +192,9 @@ def main(_):
         save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
         qa.train(sess, dataset, save_train_dir)
 
-        qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
+        #qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
+        f1, em = self.evaluate_answer(sess, train_set, log=True)
+        print("final evaluation: F1: {}, EM: {}".format(f1, em))
 
 if __name__ == "__main__":
     tf.app.run()
