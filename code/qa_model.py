@@ -174,32 +174,32 @@ class Encoder(object):
         logger.info("p_fw shape before attn {}".format(p_fw.get_shape()))
         logger.info("q_fw shape before attn {}".format(q_fw.get_shape()))
         out_q_fw, out_q_bw = q_out[0][1], q_out[1][1]
-        # with tf.variable_scope("mp_fullcontext"):
-        #     W_1 = tf.get_variable("W_1", # forward
-        #             shape=(self.size, self.config.perspective_size),
-        #             initializer=xavier_initializer)
-        #     W_2 = tf.get_variable("W_2", # backward
-        #             shape=(self.size, self.config.perspective_size),
-        #             initializer=xavier_initializer)
-        #     # q * W [batch_size,state_size,perspective] 
-        #     # tile [batch_size,max_len_p,state_size,perspective] 
-        #     q_fw_m = tf.mul(tf.expand_dims(out_q_fw, 2), W_1)
-        #     q_bw_m = tf.mul(tf.expand_dims(out_q_bw, 2), W_1)
-        #     # q_fw_m = tf.expand_dims(q_fw_m, 1)
-        #     # q_fw_m = tf.tile(q_fw_m, [1,self.config.output_size,1,1])
-        #     q_fw_m = self.expand_and_tile(q_fw_m, 1, self.config.output_size)
-        #     q_bw_m = self.expand_and_tile(q_bw_m, 1, self.config.output_size)
+        with tf.variable_scope("mp_fullcontext"):
+            W_1 = tf.get_variable("W_1", # forward
+                    shape=(self.size, self.config.perspective_size),
+                    initializer=xavier_initializer)
+            W_2 = tf.get_variable("W_2", # backward
+                    shape=(self.size, self.config.perspective_size),
+                    initializer=xavier_initializer)
+            # q * W [batch_size,state_size,perspective] 
+            # tile [batch_size,max_len_p,state_size,perspective] 
+            q_fw_m = tf.mul(tf.expand_dims(out_q_fw, 2), W_1)
+            q_bw_m = tf.mul(tf.expand_dims(out_q_bw, 2), W_2)
+            # q_fw_m = tf.expand_dims(q_fw_m, 1)
+            # q_fw_m = tf.tile(q_fw_m, [1,self.config.output_size,1,1])
+            q_fw_m = self.expand_and_tile(q_fw_m, 1, self.config.output_size)
+            q_bw_m = self.expand_and_tile(q_bw_m, 1, self.config.output_size)
 
-        #     # p * W
-        #     p_fw_m = tf.mul(tf.expand_dims(p_fw, 3), W_1)
-        #     p_bw_m = tf.mul(tf.expand_dims(p_bw, 3), W_1)
-        #     
-        #     # cosine sims
-        #     m_fw = self.cosine_sim(p_fw_m, q_fw_m, dim=2)
-        #     m_bw = self.cosine_sim(p_bw_m, q_bw_m, dim=2)
-        #     # [batch_size, max_len_p, perspective]
-        #     full_m_fw = m_fw
-        #     full_m_bw = m_bw
+            # p * W
+            p_fw_m = tf.mul(tf.expand_dims(p_fw, 3), W_1)
+            p_bw_m = tf.mul(tf.expand_dims(p_bw, 3), W_2)
+            
+            # cosine sims
+            m_fw = self.cosine_sim(p_fw_m, q_fw_m, dim=2)
+            m_bw = self.cosine_sim(p_bw_m, q_bw_m, dim=2)
+            # [batch_size, max_len_p, perspective]
+            full_m_fw = m_fw
+            full_m_bw = m_bw
         # with tf.variable_scope("mp_maxcontext"):
         #     # max pooling
         #     W_3 = tf.get_variable("W_3", # forward
@@ -230,27 +230,27 @@ class Encoder(object):
         #     # [batch_size, max_len_p, perspective]
         #     max_m_fw = m_fw
         #     max_m_bw = m_bw
-        with tf.variable_scope("dumb"):
-            W_2 = tf.get_variable("W_5", # forward
-                    shape=(self.max_len_q, self.size),
-                    initializer=xavier_initializer)
-            g = tf.mul(q_fw, W_2)
-            g = tf.reduce_sum(g, 2)
-            g = tf.tile(tf.expand_dims(g, 1), [1, 750, 1])
-            q_fw_exp = g
-            g = tf.mul(q_bw, W_2)
-            g = tf.reduce_sum(g, 2)
-            g = tf.tile(tf.expand_dims(g, 1), [1, 750, 1])
-            q_bw_exp = g
-        full_m_fw = tf.concat(2, [p_fw, q_fw_exp])
-        full_m_bw = tf.concat(2, [p_bw, q_bw_exp])
+        # with tf.variable_scope("dumb"):
+        #     W_2 = tf.get_variable("W_5", # forward
+        #             shape=(self.max_len_q, self.size),
+        #             initializer=xavier_initializer)
+        #     g = tf.mul(q_fw, W_2)
+        #     g = tf.reduce_sum(g, 2)
+        #     g = tf.tile(tf.expand_dims(g, 1), [1, self.max_len_p, 1])
+        #     q_fw_exp = g
+        #     g = tf.mul(q_bw, W_2)
+        #     g = tf.reduce_sum(g, 2)
+        #     g = tf.tile(tf.expand_dims(g, 1), [1, self.max_len_p, 1])
+        #     q_bw_exp = g
+        # full_m_fw = tf.concat(2, [p_fw, q_fw_exp])
+        # full_m_bw = tf.concat(2, [p_bw, q_bw_exp])
         
 
         # logger.info("full context size fw", full_m_fw.get_shape())
         # logger.info("maxpool context fw  ", max_m_fw.get_shape())
 
         return tf.concat(2, [full_m_fw, full_m_bw])
-        return tf.concat(2, [full_m_fw, full_m_bw, max_m_fw, max_m_bw])
+        #return tf.concat(2, [full_m_fw, full_m_bw, max_m_fw, max_m_bw])
 
     def cosine_sim_dense(self, p, q, transpose_p, transpose_q):
         p_tr = tf.transpose(p, transpose_p)
@@ -598,9 +598,9 @@ class QASystem(object):
         outputs = sess.run(output_feed, input_feed,
                 options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE,
                     output_partition_graphs=True))
-        _, loss, _ = outputs
+        _, loss, norms = outputs
 
-        return loss
+        return loss, norms
 
     def decode(self, sess, test_x):
         """
@@ -868,23 +868,23 @@ class QASystem(object):
         prog = Progbar(target=1 + int(len(train_set) / self.config.batch_size))
         print_every = 50 
         for i, batch in enumerate(minibatches(train_set, self.config.batch_size)):
-            loss = self.optimize(sess, batch)
+            loss, norms = self.optimize(sess, batch)
             prog.update(i + 1, [("train loss", loss)])
             if i % print_every == 1:
-                logger.info("Current batch:{}/{}, loss: {}".format(
-                    i, len(train_set), loss))
+                logger.info("Current batch:{}/{}, loss: {}, grad norm: {}".format(
+                    i, len(train_set), loss, norms))
                 # logger.info("F1: {}, EM: {}".format(
                 f1, em = self.evaluate_answer(sess, train_set, log=True)
                 logger.info("F1: {}, EM: {}, for {} samples".format(f1, em, 100))
 		# logger.info("hello world")
                 # logger.info("F1: {}, EM: {}".format(
                 # 	self.evaluate_answer(sess, train_set, log=True)))
-            if self.saver:
-                logger.info("Saving model in {}".format(
-                    self.config.train_dir))
-                self.saver.save(sess,
-                        os.path.join(self.config.train_dir,
-                            'model{}.weights'.format(self.config.sessname)))
+                if self.saver:
+                    logger.info("Saving model in {}".format(
+                        self.config.train_dir))
+                    self.saver.save(sess,
+                            os.path.join(self.config.train_dir,
+                                'model{}.weights'.format(self.config.sessname)))
         logger.info("")
         f1, em = self.evaluate_answer(sess, train_set, log=True)
         logger.info("After epoch: F1: {}, EM: {}, for {} samples".format(f1, em, 100))
