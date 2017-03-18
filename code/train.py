@@ -10,6 +10,7 @@ import numpy as np
 
 from qa_model import Encoder, QASystem, Decoder
 from os.path import join as pjoin
+from datetime import datetime
 
 import logging
 
@@ -118,11 +119,17 @@ def truncate_answers(ans_tups, max_length):
                   ans_tups)
     for i, tup in enumerate(ans_tups):
         if tup != new_ans[i]:
-            print("changed ({}): old: {}, new: {}".format(i, tup, new_ans[i]))
+            logger.info("changed ({}): old: {}, new: {}".format(i, tup, new_ans[i]))
     return new_ans
 # End Lisa functions
 
 def main(_):
+    if not os.path.exists(FLAGS.log_dir):
+        os.makedirs(FLAGS.log_dir)
+    FLAGS.sessname = "{:%Y%m%d_%H%M%S}".format(datetime.now())
+    file_handler = logging.FileHandler(pjoin(FLAGS.log_dir,
+                        "log{}.txt".format(FLAGS.sessname)))
+    logging.getLogger().addHandler(file_handler)
 
     # Do what you need to load datasets from FLAGS.data_dir
     dataset = None
@@ -145,7 +152,7 @@ def main(_):
     max_len_p = FLAGS.output_size # truncate
     max_len_q = max(max(map(len, train_q)), max(map(len, val_q)))
     max_len_ans = max(map(len, train_ans)) # 2
-    print("Padding training and validation data...")
+    logger.info("Padding training and validation data...")
     train_padded_p, train_mask_p = pad_sequences(train_p, max_len_p)
     train_padded_q, train_mask_q = pad_sequences(train_q, max_len_q)
     train_ans = truncate_answers(train_ans, max_len_p)
@@ -165,16 +172,16 @@ def main(_):
                     val_padded_q, val_mask_q, val_ans)
     raw_dataset = (raw_train_p, raw_val_p)
     dataset = (train_dataset, val_dataset, raw_dataset)
-    print("Sanity check on lengths: min %s, max %s" % \
+    logger.info("Sanity check on lengths: min %s, max %s" % \
             (lambda x: (min(x), max(x)))(map(len, train_padded_p)))
 
-    print("Loading glove embeddings...")
+    logger.info("Loading glove embeddings...")
     embed_path = FLAGS.embed_path or pjoin("data", "squad", "glove.trimmed.{}.npz".format(FLAGS.embedding_size))
     vocab_path = FLAGS.vocab_path or pjoin(FLAGS.data_dir, "vocab.dat")
     vocab, rev_vocab = initialize_vocab(vocab_path)
     embeddings = np.load(embed_path)#, glove=glove)
     glove = embeddings['glove'] # np array
-    print("glove dims", glove.shape)
+    logger.info("glove dims {}".format(glove.shape))
 
     encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size,
             flags=FLAGS,
@@ -186,14 +193,8 @@ def main(_):
     # create saver
     qa.saver = tf.train.Saver()
 
-    if not os.path.exists(FLAGS.log_dir):
-        os.makedirs(FLAGS.log_dir)
-    FLAGS.sessname = datetime.now()
-    file_handler = logging.FileHandler(pjoin(FLAGS.log_dir,
-                        "log{}.txt".format(sessname)))
-    logging.getLogger().addHandler(file_handler)
 
-    print(vars(FLAGS))
+    logger.info("{}".format(vars(FLAGS)))
     with open(os.path.join(FLAGS.log_dir, "flags.json"), 'w') as fout:
         json.dump(FLAGS.__flags, fout)
 
@@ -208,7 +209,7 @@ def main(_):
 
         #qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
         f1, em = qa.evaluate_answer(sess, train_set, log=True)
-        print("final evaluation: F1: {}, EM: {}".format(f1, em))
+        logger.info("final evaluation: F1: {}, EM: {}".format(f1, em))
 
 if __name__ == "__main__":
     tf.app.run()

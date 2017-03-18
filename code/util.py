@@ -15,7 +15,7 @@ import StringIO
 from collections import defaultdict, Counter, OrderedDict
 import numpy as np
 from numpy import array, zeros, allclose
-import datetime
+from datetime import datetime
 
 logger = logging.getLogger("hw3")
 logger.setLevel(logging.DEBUG)
@@ -329,6 +329,7 @@ class Progbar(object):
             bar += ('.'*(self.width-prog_width))
             bar += ']'
             sys.stdout.write(bar)
+            logger.info(bar)
             self.total_width = len(bar)
 
             if current:
@@ -353,6 +354,7 @@ class Progbar(object):
 
             sys.stdout.write(info)
             sys.stdout.flush()
+            logger.info(info)
 
             if current >= self.target:
                 sys.stdout.write("\n")

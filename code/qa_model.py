@@ -88,15 +88,15 @@ class Encoder(object):
         # calculate different cosine similarity...
         p_tile = tf.nn.l2_normalize(p_tile, 3)
         q_tile = tf.nn.l2_normalize(q_tile, 3)
-        #print("q_tile", q_tile.get_shape(), "p_tile", p_tile.get_shape())
+        #logger.info("q_tile", q_tile.get_shape(), "p_tile", p_tile.get_shape())
         r_ij = self.cosine_sim(p_tile, q_tile, dim=3)
-        #print("cosine sim shape", r_ij.get_shape())
+        #logger.info("cosine sim shape", r_ij.get_shape())
         # should be [batch_size, max_len_p]
         r = tf.reduce_max(r_ij,2)
-        #print("relevancy shape", r.get_shape())
+        #logger.info("relevancy shape", r.get_shape())
         r = tf.expand_dims(r, 2)
         new_context = tf.mul(p_context, r)
-        #print("new context shape", new_context.get_shape())
+        #logger.info("new context shape", new_context.get_shape())
         return new_context
         
 
@@ -171,8 +171,8 @@ class Encoder(object):
         # [batch_size, max_len_p, max_len_q,state_size] 
         #p_fw_exp = tf.reshape(tf.tile(tf.expand_dims(p_fw, 
         # u = tf.reshape(tf.tile(tf.expand_dims(u, 1), [1, M, 1, 1]), [N * M, JQ, 2 * d])
-        print("p_fw shape before attn", p_fw.get_shape())
-        print("q_fw shape before attn", q_fw.get_shape())
+        logger.info("p_fw shape before attn {}".format(p_fw.get_shape()))
+        logger.info("q_fw shape before attn {}".format(q_fw.get_shape()))
         out_q_fw, out_q_bw = q_out[0][1], q_out[1][1]
         # with tf.variable_scope("mp_fullcontext"):
         #     W_1 = tf.get_variable("W_1", # forward
@@ -246,8 +246,8 @@ class Encoder(object):
         full_m_bw = tf.concat(2, [p_bw, q_bw_exp])
         
 
-        # print("full context size fw", full_m_fw.get_shape())
-        # print("maxpool context fw  ", max_m_fw.get_shape())
+        # logger.info("full context size fw", full_m_fw.get_shape())
+        # logger.info("maxpool context fw  ", max_m_fw.get_shape())
 
         return tf.concat(2, [full_m_fw, full_m_bw])
         return tf.concat(2, [full_m_fw, full_m_bw, max_m_fw, max_m_bw])
@@ -258,7 +258,7 @@ class Encoder(object):
         q_tr = tf.transpose(q, transpose_q)
         q_tr = tf.nn.l2_normalize(q_tr, dim=len(transpose_q)-1) # assumes last thing
         cosine_similarity = tf.matmul(p_tr, q_tr)
-        print("dense sim shape", cosine_similarity.get_shape())
+        logger.info("dense sim shape {}".format(cosine_similarity.get_shape()))
         return cosine_similarity
 
 
@@ -277,7 +277,7 @@ class Encoder(object):
         q = tf.nn.l2_normalize(q, dim)
         m = tf.mul(p, q)
         m = tf.reduce_sum(m,axis=dim)
-        print("shape of cosine", m.get_shape())
+        logger.info("shape of cosine {}".format(m.get_shape()))
         return m
 
 class Decoder(object):
@@ -325,7 +325,8 @@ class Decoder(object):
             b_end = tf.get_variable("b_end",
                     shape=(self.output_size,),
                     initializer=tf.constant_initializer(0))
-            print("W_end", W_end.get_shape(), "a_end", a_end.get_shape())
+            logger.info("W_end {}, a_end {}".format(
+                W_end.get_shape(), a_end.get_shape()))
             self.y_st = tf.matmul(a_st, W_st) + b_st
             self.y_end = tf.matmul(a_end, W_end) + b_end
 
@@ -338,7 +339,8 @@ class Decoder(object):
             W_st = tf.get_variable("W_st",
                 (self.config.state_size,),
                 initializer=xavier_initializer)
-            print("W_st", W_st.get_shape(), "p", knowledge_rep.get_shape())
+            logger.info("W_st {}, p {}".format(
+                W_st.get_shape(), knowledge_rep.get_shape()))
             self.y_st = tf.reduce_sum(tf.mul(knowledge_rep, W_st), 2)
 
         cell = tf.nn.rnn_cell.BasicLSTMCell(self.config.state_size,
@@ -351,7 +353,8 @@ class Decoder(object):
             W_end = tf.get_variable("W_end",
                 (self.config.state_size,),
                 initializer=xavier_initializer)
-            print("W_end", W_end.get_shape(), "a_end", a_end.get_shape())
+            logger.info("W_end {}, a_end{}".format(
+                W_end.get_shape(), a_end.get_shape()))
             self.y_end = tf.reduce_sum(tf.mul(a_end, W_end), 2)
 
         return (self.y_st, self.y_end)
@@ -374,7 +377,7 @@ class Decoder(object):
                 initializer=xavier_initializer)
             self.y_st = tf.reduce_sum(tf.mul(aggr, W_st), 2)
             self.y_end = tf.reduce_sum(tf.mul(aggr, W_end), 2)
-            print("y_st shape", self.y_st.get_shape())
+            logger.info("y_st shape {}".format(self.y_st.get_shape()))
         return (self.y_st, self.y_end)
         
 
@@ -452,15 +455,15 @@ class QASystem(object):
             attn_p = self.encoder.mp_attention(encode_p, encode_q, encode_out_q)
         elif self.use_mix:
             attn_p = self.encoder.mix_attention(encode_p, encode_q)
-        print("attn_p", attn_p.get_shape())
+        logger.info("attn_p {}".format(attn_p.get_shape()))
 
         # encoded p, attention p, and elt-wise mult of the two
         if self.use_basic:
             encode_context = tf.concat(2, [attn_p, encode_p, attn_p * encode_p])
         else:
             encode_context = attn_p
-        print("encode_context", encode_context.get_shape())
-        print("mask_p_placeholder", self.mask_p_placeholder.get_shape())
+        logger.info("encode_context {}".format(encode_context.get_shape()))
+        logger.info("mask_p_placeholder {}".format(self.mask_p_placeholder.get_shape()))
 
         # [None,], [None,] (length is length of batch)
         if self.use_basic:
@@ -472,7 +475,7 @@ class QASystem(object):
         elif self.use_mix:
             self.yp, self.yp2 = self.decoder.mix_decode(encode_context,
                     masks=self.mask_p_placeholder) # start, end
-        print("self.yp", self.yp, self.yp2)
+        logger.info("self.yp {}, yp2 {}".format(self.yp, self.yp2))
 
 
     def setup_loss(self):
@@ -481,22 +484,30 @@ class QASystem(object):
         :return:
         """
         with vs.variable_scope("loss"):
-            print("placeholder size", self.st_placeholder.get_shape())
-            print("yp size", self.yp.get_shape())
-            self.st_inds = tf.Print(self.st_placeholder, [self.st_placeholder],
-                          message="expected starts")
+            logger.info("placeholder size {}".format(
+                self.st_placeholder.get_shape()))
+            logger.info("yp size {}".format(self.yp.get_shape()))
+            self.st_inds = tf.Print(self.st_placeholder,
+                    [self.st_placeholder],
+                    message="expected starts",
+                    summarize=self.config.batch_size)
+            self.end_inds = tf.Print(self.end_placeholder,
+                    [self.end_placeholder],
+                    message="expected ends",
+                    summarize=self.config.batch_size)
             self.yp = tf.Print(self.yp, [tf.argmax(self.yp, 1)],
-                          message="guessed starts")
+                    message="guessed starts",
+                    summarize=self.config.batch_size)
+            self.yp2 = tf.Print(self.yp2, [tf.argmax(self.yp2, 1)],
+                    message="guessed ends",
+                    summarize=self.config.batch_size)
+
             batch_softmax_st = tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=self.st_inds, logits=self.yp)
 
-            self.end_inds = tf.Print(self.end_placeholder, [self.end_placeholder],
-                          message="expected starts")
-            self.yp2 = tf.Print(self.yp2, [tf.argmax(self.yp2, 1)],
-                          message="guessed starts")
             batch_softmax_end = tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=self.end_inds, logits=self.yp2)
-            # print("len st and end", len(st_batch), len(end_batch), len(ans_batch))
+            # logger.info("len st and end", len(st_batch), len(end_batch), len(ans_batch))
             # Lisa: changed 3/17 to sum of average losses from each of these
             self.loss = tf.reduce_mean(batch_softmax_st + batch_softmax_end)
 
@@ -528,6 +539,8 @@ class QASystem(object):
             grads_and_vars = zip(grads, and_vars)
 
         self.grad_norm = tf.global_norm(grads_and_vars)
+        self.grad_norm = tf.Print(self.grad_norm,
+                [self.grad_norm], message="grad norm:")
         self.train_op = optimizer.apply_gradients(grads_and_vars)
                 #global_step=self.global_step)
 
@@ -543,14 +556,15 @@ class QASystem(object):
             self.p_embeddings = tf.nn.embedding_lookup(embeddings,
                     self.p_placeholder)
             # (None, max_len_p, embed.size)
-            print("p shape", self.p_placeholder.get_shape())
-            print("p embeddings shape", self.p_embeddings.get_shape())
+            logger.info("p shape {}".format(self.p_placeholder.get_shape()))
+            logger.info("p embeddings shape {}".format(
+                self.p_embeddings.get_shape()))
 
             self.q_embeddings = tf.nn.embedding_lookup(embeddings,
                     self.q_placeholder)
             # (None, max_len_p, embed.size)
-            print("q shape", self.q_placeholder.get_shape())
-            print("q embeddings shape", self.q_embeddings.get_shape())
+            logger.info("q shape {}".format(self.q_placeholder.get_shape()))
+            logger.info("q embeddings shape {}".format(self.q_embeddings.get_shape()))
 
     def create_feed_dict(self, p_batch, mask_p_batch, q_batch, mask_q_batch, ans_batch=None, dropout=1):
         input_feed = {}
@@ -564,7 +578,8 @@ class QASystem(object):
             input_feed[self.end_placeholder] = end_batch
         dropout = 1 # TODO: change and move to train.py
         input_feed[self.dropout_placeholder] = dropout
-        print("input_feed_dict", len(input_feed), len(input_feed[self.p_placeholder]))
+        logger.info("input_feed_dict {}, {}".format(
+            len(input_feed), len(input_feed[self.p_placeholder])))
         return input_feed
 
     def optimize(self, sess, data):
@@ -577,17 +592,13 @@ class QASystem(object):
         input_feed = self.create_feed_dict(p_batch, mask_p_batch,
                 q_batch, mask_q_batch, ans_batch=ans_batch)
 
-        run_metadata = tf.RunMetadata()
         #run_metadata = tf.Print(run_metadata, [run_metadata])
-        output_feed = [self.train_op, self.loss]
+        output_feed = [self.train_op, self.loss, self.grad_norm]
 
         outputs = sess.run(output_feed, input_feed,
                 options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE,
-                    output_partition_graphs=True),
-                run_metadata=run_metadata)
-        _, loss = outputs
-        with open("runmeta.out", 'w') as f:
-            f.write(str(run_metadata))
+                    output_partition_graphs=True))
+        _, loss, _ = outputs
 
         return loss
 
@@ -706,12 +717,12 @@ class QASystem(object):
                     guess_st[i], guess_end[i])
             actual = get_substring(text_samples[i],
                     actual_st[i], actual_end[i])
-            #print("prediction:{}, actual:{}".format(prediction, actual))
+            #logger.info("prediction:{}, actual:{}".format(prediction, actual))
             f1 += f1_score(prediction, actual)
             em += exact_match_score(prediction, actual)
 
         avg_f1, avg_em = f1/float(sample), em/float(sample)
-        print("f1", avg_f1, "em", avg_em)
+        logger.info("f1 {}, em {}".format(avg_f1, avg_em))
         return avg_f1, avg_em
             
 
@@ -723,8 +734,8 @@ class QASystem(object):
         default = np.array([0., 0., 0., 0., 0.])
         data = []
         for i in range(sample):
-            # print("actual: %s, %s" % (actual_st[i], actual_end[i]))
-            # print("guess: %s, %s" % (guess_st[i], guess_end[i]))
+            # logger.info("actual: %s, %s" % (actual_st[i], actual_end[i]))
+            # logger.info("guess: %s, %s" % (guess_st[i], guess_end[i]))
             act_range = np.arange(actual_st[i], actual_end[i]+1)
             guess_range = np.arange(guess_st[i], guess_end[i]+1)
             fp = len(np.setdiff1d(guess_range, act_range).tolist())
@@ -739,7 +750,7 @@ class QASystem(object):
             prec = (tp)/(tp + fp) if tp > 0  else 0
             rec = (tp)/(tp + fn) if tp > 0  else 0
             f1 = 2 * prec * rec / (prec + rec) if tp > 0  else 0
-            # print("for this sample: acc %s, prec %s, rec %s, f1 %s, exact %s" % \
+            # logger.info("for this sample: acc %s, prec %s, rec %s, f1 %s, exact %s" % \
             #         (acc, prec, rec, f1, int(exact)))
 
             # update micro/macro averages
@@ -769,11 +780,11 @@ class QASystem(object):
 
         # Macro and micro average.
         #return to_table(data, self.labels + ["micro","macro","not-O"], ["label", "acc", "prec", "rec", "f1"])
-        print("total exact: %s" % exact)
+        logger.info("total exact: %s" % exact)
 
         #if log:
         #logging.info("F1: {}, EM: {}, for {} samples".format(f1, em, sample))
-        print("F1: {}, EM: {}, for {} samples".format(f1, em, sample))
+        logger.info("F1: {}, EM: {}, for {} samples".format(f1, em, sample))
 
         return f1, em
 
@@ -810,9 +821,9 @@ class QASystem(object):
 
         tic = time.time()
         params = tf.trainable_variables()
-        print("trainable variables", '\n'.join(
+        logger.info("trainable variables {}".format('\n'.join(
             map(lambda var: '\t{}:{}'.format(var.name, var.get_shape()),
-            params)))
+            params))))
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
         toc = time.time()
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
@@ -820,12 +831,12 @@ class QASystem(object):
         # Lisa
         best_score = 0.
         train_set, val_set, raw_set = dataset
-        print("train_set", len(train_set))
+        logger.info("train_set", len(train_set))
         self.raw_train, self.raw_val = raw_set
         for epoch in range(self.config.epochs):
             logger.info("Epoch %d out of %d", epoch+1, self.config.epochs)
             g = tf.get_default_graph()
-            print("getting default operations")
+            logger.info("getting default operations")
             def dim_calc(tfshape):
                 is_none = False
                 prod = 1
@@ -838,7 +849,9 @@ class QASystem(object):
                     return str(tfshape)
             if epoch == 0: # only for first epoch
                 for op in g.get_operations():
-                    print(op.name, map(lambda v: dim_calc(v.get_shape()), op.outputs))
+                    logger.info("{}, {}".format(op.name,
+                        map(lambda v: dim_calc(v.get_shape()),
+                                op.outputs)))
             score = self.run_epoch(sess, train_set, val_set)
             if score > best_score:
                 best_score = score
@@ -862,9 +875,9 @@ class QASystem(object):
                     i, len(train_set), loss))
                 # logger.info("F1: {}, EM: {}".format(
                 f1, em = self.evaluate_answer(sess, train_set, log=True)
-                print("F1: {}, EM: {}, for {} samples".format(f1, em, 100))
+                logger.info("F1: {}, EM: {}, for {} samples".format(f1, em, 100))
 		# logger.info("hello world")
-                # print("F1: {}, EM: {}".format(
+                # logger.info("F1: {}, EM: {}".format(
                 # 	self.evaluate_answer(sess, train_set, log=True)))
             if self.saver:
                 logger.info("Saving model in {}".format(
@@ -872,9 +885,9 @@ class QASystem(object):
                 self.saver.save(sess,
                         os.path.join(self.config.train_dir,
                             'model{}.weights'.format(self.config.sessname)))
-        print("")
+        logger.info("")
         f1, em = self.evaluate_answer(sess, train_set, log=True)
-        print("After epoch: F1: {}, EM: {}, for {} samples".format(f1, em, 100))
+        logger.info("After epoch: F1: {}, EM: {}, for {} samples".format(f1, em, 100))
 
         # TODO: implement validation on dev set.
         # from ner_model.py: self.evaluate(sess, dev_set)
