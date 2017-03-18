@@ -16,6 +16,7 @@ from collections import defaultdict, Counter, OrderedDict
 import numpy as np
 from numpy import array, zeros, allclose
 from datetime import datetime
+import os
 
 logger = logging.getLogger("hw3")
 logger.setLevel(logging.DEBUG)
@@ -440,3 +441,69 @@ def print_sentence(output, sentence, labels, predictions):
 
 def get_substring(par, st, end):
     return ' '.join(par[st:end+1])
+
+#### Lisa: preprocess data
+def read_id_file(filepath):
+    with open(filepath, 'r') as f:
+        return map(lambda line: map(int, (line.strip()).split(' ')),
+                f.readlines())
+def read_raw_file(filepath):
+    with open(filepath, 'r') as f:
+        return map(lambda line: (line.strip()).split(' '),
+                f.readlines())
+
+# TODO:
+# also pads sequences so that they are constant length.
+# no longer: does NOT pad zeros. Only gets length of each sequence.
+def pad_sequences(data, max_length):
+    # Use this zero vector when padding sequences.
+    pad_sentences = []
+    # truncate to max length
+    data = map(lambda par: par[:max_length], data)
+    seq_lens = map(len, data)
+    pad_lens = map(lambda seq_len: max(max_length - seq_len, 0),
+            seq_lens)
+    import numpy as np
+    # pad to max_length
+    pad_sentences = map(lambda i: np.pad(data[i],
+                                        (0,pad_lens[i]),
+                                        'constant'),
+                        range(len(pad_lens)))
+    return pad_sentences, seq_lens
+
+def truncate_answers(ans_tups, max_length):
+    max_ind = max_length - 1
+    new_ans = map(lambda (st, end): [min(st, max_ind), min(end, max_ind)],
+                  ans_tups)
+    for i, tup in enumerate(ans_tups):
+        if tup != new_ans[i]:
+            logger.info("changed ({}): old: {}, new: {}".format(i, tup, new_ans[i]))
+    return new_ans
+
+def load_dataset(dataset_str, dirname):
+    logger.info("Loading {}...".format(dataset_str))
+    p = read_id_file(os.path.join(dirname,
+        '{}.ids.context'.format(dataset_str)))
+    raw_p = read_raw_file(os.path.join(dirname,
+        '{}.context'.format(dataset_str)))
+    q = read_id_file(os.path.join(dirname,
+        '{}.ids.question'.format(dataset_str)))
+    ans = read_id_file(os.path.join(dirname,
+        '{}.span'.format(dataset_str)))
+    logger.info("Done. Read %d contexts, %d questions, %d answers" % \
+            (len(p), len(q), len(ans)))
+    return p, raw_p, q, ans
+
+def preprocess_data(dataset, dataset_str, max_len_p, max_len_q):
+    logger.info("Padding {}...max_p {}, max_q{}".format(
+        dataset_str, max_len_p, max_len_q))
+    ans = None
+    if len(dataset) == 2:
+        p, q = dataset
+    else:
+        p, q, ans = dataset
+    padded_p, mask_p = pad_sequences(p, max_len_p)
+    padded_q, mask_q = pad_sequences(q, max_len_q)
+    if ans:
+        ans = truncate_answers(ans, max_len_p)
+    return padded_p, mask_p, padded_q, mask_q, ans

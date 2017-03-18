@@ -65,6 +65,10 @@ class Encoder(object):
         # time_major=False: [batch_size, max_time, cell_fw.output_size]
         cell = tf.nn.rnn_cell.BasicLSTMCell(self.size,
                         state_is_tuple=True)
+        cell = tf.nn.rnn_cell.DropoutWrapper(cell,
+                input_keep_prob=self.dropout_placeholder,
+                output_keep_prob=self.dropout_placeholder)
+
         with tf.variable_scope("encode"):
             if reuse:
                 tf.get_variable_scope().reuse_variables()
@@ -303,6 +307,9 @@ class Decoder(object):
         # 2 for either st or end
         # time_major=False: [batch_size, max_time, 2]
         cell = tf.nn.rnn_cell.BasicLSTMCell(2, state_is_tuple=True)
+        cell = tf.nn.rnn_cell.DropoutWrapper(cell,
+                input_keep_prob=self.dropout_placeholder,
+                output_keep_prob=self.dropout_placeholder)
         with tf.variable_scope("basic_decode"):
             xavier_initializer = tf.contrib.layers.xavier_initializer()
             a_st_end, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,
@@ -345,6 +352,9 @@ class Decoder(object):
 
         cell = tf.nn.rnn_cell.BasicLSTMCell(self.config.state_size,
                 state_is_tuple=True)
+        cell = tf.nn.rnn_cell.DropoutWrapper(cell,
+                input_keep_prob=self.dropout_placeholder,
+                output_keep_prob=self.dropout_placeholder)
         with tf.variable_scope("mix_decode_end"):
             a_end, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,
                     sequence_length=masks,
@@ -361,6 +371,9 @@ class Decoder(object):
 
     def mp_decode(self, knowledge_rep, masks=None):
         cell = tf.nn.rnn_cell.BasicLSTMCell(self.config.state_size, state_is_tuple=True)
+        cell = tf.nn.rnn_cell.DropoutWrapper(cell,
+                input_keep_prob=self.dropout_placeholder,
+                output_keep_prob=self.dropout_placeholder)
         with tf.variable_scope("mp_aggregation"):
             aggr, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,
                     sequence_length=masks,
@@ -397,8 +410,7 @@ class QASystem(object):
         self.pretrained_embeddings = args[0]
         self.max_len_p = args[1]
         self.max_len_q = args[2]
-        self.max_len_ans = args[3]
-        self.config = args[4] # FLAGS in train.py
+        self.config = args[3] # FLAGS in train.py
         # ==== set up placeholder tokens ========
         self.p_placeholder = tf.placeholder(tf.int32,
                 shape=(None,self.max_len_p))
@@ -412,8 +424,12 @@ class QASystem(object):
                 shape=(None,)) # dim 2
         self.end_placeholder = tf.placeholder(tf.int32,
                 shape=(None,)) # dim 2
-        self.dropout_placeholder = tf.placeholder(tf.int32,
+        self.dropout_placeholder = tf.placeholder(tf.float32,
                 shape=())
+        
+        # let dropout be accessible from encoder and decoder.
+        self.encoder.dropout_placeholder = self.dropout_placeholder
+        self.decoder.dropout_placeholder = self.dropout_placeholder
         
         self.use_basic = self.config.model_type == 0
         self.use_mp = self.config.model_type == 1
@@ -514,16 +530,16 @@ class QASystem(object):
     def setup_training(self):
         # self.train_op = \
         #     tf.train.AdamOptimizer(self.config.learning_rate).minimize(self.loss)
-        with tf.variable_scope("minimize_step"):
-            self.global_step = tf.get_variable("global_step",
-                    0, trainable=False)
-            epoch_size = self.config.num_iters / float(self.config.batch_size)
-            self.lr_exp = tf.train.exponential_decay(
-			    self.config.learning_rate,                # Base learning rate.
-			    self.global_step,  # Current index into the dataset.
-			    2 * epoch_size,          # Decay step. (every two epochs)
-			    0.95,                # Decay rate.
-			    staircase=True)
+        # with tf.variable_scope("minimize_step"):
+        #     self.global_step = tf.get_variable("global_step",
+        #             0, trainable=False)
+        #     epoch_size = self.config.num_iters / float(self.config.batch_size)
+        #     self.lr_exp = tf.train.exponential_decay(
+        #       self.config.learning_rate,                # Base learning rate.
+		# 	    self.global_step,  # Current index into the dataset.
+		# 	    2 * epoch_size,          # Decay step. (every two epochs)
+		# 	    0.95,                # Decay rate,
+        #         staircase=True)
         optimizer_type = \
                 get_optimizer(self.config.optimizer)
         # TODO: NOT DECAYING LEARNING RATE BC ADAM OPTIMIZER
@@ -576,10 +592,10 @@ class QASystem(object):
             st_batch, end_batch = zip(*ans_batch)
             input_feed[self.st_placeholder] = st_batch
             input_feed[self.end_placeholder] = end_batch
-        dropout = 1 # TODO: change and move to train.py
+        #dropout = 1 # TODO: change and move to train.py
         input_feed[self.dropout_placeholder] = dropout
-        logger.info("input_feed_dict {}, {}".format(
-            len(input_feed), len(input_feed[self.p_placeholder])))
+        # logger.info("input_feed_dict {}, {}".format(
+        #     len(input_feed), len(input_feed[self.p_placeholder])))
         return input_feed
 
     def optimize(self, sess, data):
@@ -590,7 +606,8 @@ class QASystem(object):
         """
         p_batch, mask_p_batch, q_batch, mask_q_batch, ans_batch = data
         input_feed = self.create_feed_dict(p_batch, mask_p_batch,
-                q_batch, mask_q_batch, ans_batch=ans_batch)
+                q_batch, mask_q_batch, ans_batch=ans_batch,
+                dropout=self.config.dropout)
 
         #run_metadata = tf.Print(run_metadata, [run_metadata])
         output_feed = [self.train_op, self.loss, self.grad_norm]

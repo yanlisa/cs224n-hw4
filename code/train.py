@@ -7,6 +7,7 @@ import json
 
 import tensorflow as tf
 import numpy as np
+from util import *
 
 from qa_model import Encoder, QASystem, Decoder
 from os.path import join as pjoin
@@ -19,7 +20,6 @@ logger.setLevel(logging.DEBUG)
 logging.basicConfig(format='%s(levelname)s:%s(message)s', level=logging.INFO)
 
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
-tf.app.flags.DEFINE_float("max_gradient_norm", 10.0, "Clip gradients to this norm.")
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_integer("batch_size", 40, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
@@ -85,42 +85,7 @@ def get_normalized_train_dir(train_dir):
     return global_train_dir
 
 # Lisa functions
-def read_id_file(filepath):
-    with open(filepath, 'r') as f:
-        return map(lambda line: map(int, (line.strip()).split(' ')),
-                f.readlines())
-def read_raw_file(filepath):
-    with open(filepath, 'r') as f:
-        return map(lambda line: (line.strip()).split(' '),
-                f.readlines())
 
-# TODO:
-# also pads sequences so that they are constant length.
-# no longer: does NOT pad zeros. Only gets length of each sequence.
-def pad_sequences(data, max_length):
-    # Use this zero vector when padding sequences.
-    pad_sentences = []
-    # truncate to max length
-    data = map(lambda par: par[:max_length], data)
-    seq_lens = map(len, data)
-    pad_lens = map(lambda seq_len: max(max_length - seq_len, 0),
-            seq_lens)
-    import numpy as np
-    # pad to max_length
-    pad_sentences = map(lambda i: np.pad(data[i],
-                                        (0,pad_lens[i]),
-                                        'constant'),
-                        range(len(pad_lens)))
-    return pad_sentences, seq_lens
-
-def truncate_answers(ans_tups, max_length):
-    max_ind = max_length - 1
-    new_ans = map(lambda (st, end): [min(st, max_ind), min(end, max_ind)],
-                  ans_tups)
-    for i, tup in enumerate(ans_tups):
-        if tup != new_ans[i]:
-            logger.info("changed ({}): old: {}, new: {}".format(i, tup, new_ans[i]))
-    return new_ans
 # End Lisa functions
 
 def main(_):
@@ -133,32 +98,23 @@ def main(_):
 
     # Do what you need to load datasets from FLAGS.data_dir
     dataset = None
-    logger.info("Loading training...")
-    train_p = read_id_file(os.path.join(FLAGS.data_dir, 'train.ids.context'))
-    raw_train_p = read_raw_file(os.path.join(FLAGS.data_dir, 'train.context'))
-    train_q = read_id_file(os.path.join(FLAGS.data_dir, 'train.ids.question'))
-    train_ans = read_id_file(os.path.join(FLAGS.data_dir, 'train.span'))
-    logger.info("Done. Read %d contexts, %d questions, %d answers" % \
-            (len(train_p), len(train_q), len(train_ans)))
-    logger.info("Loading validation...")
-    val_p = read_id_file(os.path.join(FLAGS.data_dir, 'val.ids.context'))
-    raw_val_p = read_raw_file(os.path.join(FLAGS.data_dir, 'val.context'))
-    val_q = read_id_file(os.path.join(FLAGS.data_dir, 'val.ids.question'))
-    val_ans = read_id_file(os.path.join(FLAGS.data_dir, 'val.span'))
-    logger.info("Done. Read %d contexts, %d questions, %d answers" % \
-            (len(val_p), len(val_q), len(val_ans)))
+    train_p, raw_train_p, train_q, train_ans = \
+            load_dataset("train", FLAGS.data_dir)
+    val_p, raw_val_p, val_q, val_ans = \
+            load_dataset("train", FLAGS.data_dir)
 
     max_len_p = max(max(map(len, train_p)), max(map(len, val_p)))
     max_len_p = FLAGS.output_size # truncate
     max_len_q = max(max(map(len, train_q)), max(map(len, val_q)))
     max_len_ans = max(map(len, train_ans)) # 2
-    logger.info("Padding training and validation data...")
-    train_padded_p, train_mask_p = pad_sequences(train_p, max_len_p)
-    train_padded_q, train_mask_q = pad_sequences(train_q, max_len_q)
-    train_ans = truncate_answers(train_ans, max_len_p)
-    val_padded_p, val_mask_p = pad_sequences(val_p, max_len_p)
-    val_padded_q, val_mask_q = pad_sequences(val_q, max_len_q)
-    val_ans = truncate_answers(val_ans, max_len_p)
+
+    train_padded_p, train_mask_p, train_padded_q, train_mask_q, train_ans = \
+            preprocess_data((train_p, train_q, train_ans), "train",
+                max_len_p, max_len_q)
+    val_padded_p, val_mask_p, val_padded_q, val_mask_q, val_ans = \
+            preprocess_data((val_p, val_q, val_ans), "val",
+                max_len_p, max_len_q)
+
     t_len = 100
     t_len = -1
     if t_len != -1: # minibatch to check overfitting
@@ -189,7 +145,7 @@ def main(_):
     decoder = Decoder(output_size=FLAGS.output_size, flags=FLAGS)
 
     qa = QASystem(encoder, decoder, glove, max_len_p, max_len_q,
-            max_len_ans, FLAGS)
+            FLAGS)
     # create saver
     qa.saver = tf.train.Saver()
 

@@ -8,6 +8,7 @@ import json
 import sys
 import random
 from os.path import join as pjoin
+from util import *
 
 from tqdm import tqdm
 import numpy as np
@@ -23,21 +24,37 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-FLAGS = tf.app.flags.FLAGS
-
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
-tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
-tf.app.flags.DEFINE_integer("epochs", 0, "Number of epochs to train.")
-tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
+tf.app.flags.DEFINE_integer("batch_size", 40, "Batch size to use during training.")
+tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
+tf.app.flags.DEFINE_integer("state_size", 100, "Size of each model layer.")
+tf.app.flags.DEFINE_integer("output_size", 500, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
-tf.app.flags.DEFINE_integer("output_size", 750, "The output size of your model.")
-tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
-tf.app.flags.DEFINE_string("train_dir", "train", "Training directory (default: ./train).")
+tf.app.flags.DEFINE_integer("perspective_size", 50, "Size of the pretrained vocabulary.")
+tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
+tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
+tf.app.flags.DEFINE_string("load_train_dir", "", "Training directory to load model parameters from to resume training (default: {train_dir}).")
 tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (default: ./log)")
+tf.app.flags.DEFINE_string("optimizer", "adam", "adam / sgd")
+tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per print.")
+tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
+tf.app.flags.DEFINE_integer("model_type", 1, "basic: 0, multiperspective: 1, mix: 2")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
+tf.app.flags.DEFINE_boolean("clip_gradients",True, "Clip gradients")
+tf.app.flags.DEFINE_float("max_grad_norm", 10., "max grad to clip to")
 tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the JSON dev set to evaluate against (default: ./data/squad/dev-v1.1.json)")
+
+# old version
+# tf.app.flags.DEFINE_string("train_dir", "train", "Training directory (default: ./train).")
+# tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (default: ./log)")
+# tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
+# tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
+# tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the JSON dev set to evaluate against (default: ./data/squad/dev-v1.1.json)")
+
+
+FLAGS = tf.app.flags.FLAGS
 
 def initialize_model(session, model, train_dir):
     ckpt = tf.train.get_checkpoint_state(train_dir)
@@ -70,6 +87,7 @@ def read_dataset(dataset, tier, vocab):
     of questions and answers processed for the dataset"""
 
     context_data = []
+    raw_context_data = []
     query_data = []
     question_uuid_data = []
 
@@ -93,11 +111,12 @@ def read_dataset(dataset, tier, vocab):
                 context_ids = [str(vocab.get(w, qa_data.UNK_ID)) for w in context_tokens]
                 qustion_ids = [str(vocab.get(w, qa_data.UNK_ID)) for w in question_tokens]
 
+                raw_context_data.append(' '.join(context_tokens))
                 context_data.append(' '.join(context_ids))
                 query_data.append(' '.join(qustion_ids))
                 question_uuid_data.append(question_uuid)
 
-    return context_data, query_data, question_uuid_data
+    return context_data, raw_context_data, query_data, question_uuid_data
 
 
 def prepare_dev(prefix, dev_filename, vocab):
@@ -105,9 +124,9 @@ def prepare_dev(prefix, dev_filename, vocab):
     dev_dataset = maybe_download(squad_base_url, dev_filename, prefix)
 
     dev_data = data_from_json(os.path.join(prefix, dev_filename))
-    context_data, question_data, question_uuid_data = read_dataset(dev_data, 'dev', vocab)
+    context_data, raw_context_data, question_data, question_uuid_data = read_dataset(dev_data, 'dev', vocab)
 
-    return context_data, question_data, question_uuid_data
+    return context_data, raw_context_data, question_data, question_uuid_data
 
 
 def generate_answers(sess, model, dataset, rev_vocab):
@@ -131,6 +150,46 @@ def generate_answers(sess, model, dataset, rev_vocab):
     """
     answers = {}
 
+    p, raw_p, q, uuid_data = dataset
+    max_len_p = min(max(map(len, p)), FLAGS.output_size)
+    max_len_q = max(map(len, q))
+
+    # p, mask_p, q, mask_q, _ = \
+    #         preprocess_data((p, q),'dev', max_len_p, max_len_q)
+
+    # get the guesses
+    #all_samples = zip(p, mask_p, q, mask_q)
+    num_iters = len(p)/int(FLAGS.batch_size) + 1
+    i_st = 0
+    all_guess_st, all_guess_end = [], []
+    print("{} samples, processing in {} steps...".format(
+        len(p), num_iters))
+    for i in range(int(num_iters)):
+        if i_st >= len(p): continue
+        i_end = (i+1) * FLAGS.batch_size
+        if i_end >= len(p):
+            p_samples = p[i_st:]
+            q_samples = q[i_st:]
+        else:
+            p_samples = p[i_st:i_end]
+            q_samples = q[i_st:i_end]
+        samples_set = \
+                preprocess_data((p_samples, q_samples),
+                        'dev({},{})'.format(i_st, i_end),
+                        max_len_p, max_len_q)
+        guess_st, guess_end = model.answer(sess, samples_set[:-1])
+        all_guess_st += guess_st.tolist()
+        all_guess_end += guess_end.tolist()
+        i_st = i_end # prev
+        break
+
+    # record wrt uuid
+    easy_process = zip(uuid_data, raw_p,
+            all_guess_st, all_guess_end)
+    for uuid, text, st, end in easy_process:
+         answers[uuid] = get_substring(text, st, end)
+    print("answers", answers)
+
     return answers
 
 
@@ -151,35 +210,57 @@ def get_normalized_train_dir(train_dir):
 
 
 def main(_):
-
+    global FLAGS
+    print("FLAGS:", vars(FLAGS))
     vocab, rev_vocab = initialize_vocab(FLAGS.vocab_path)
 
     embed_path = FLAGS.embed_path or pjoin("data", "squad", "glove.trimmed.{}.npz".format(FLAGS.embedding_size))
+    embeddings = np.load(embed_path)#, glove=glove)
+    glove = embeddings['glove'] # np array
 
     if not os.path.exists(FLAGS.log_dir):
         os.makedirs(FLAGS.log_dir)
     file_handler = logging.FileHandler(pjoin(FLAGS.log_dir, "log.txt"))
     logging.getLogger().addHandler(file_handler)
 
-    print(vars(FLAGS))
-    with open(os.path.join(FLAGS.log_dir, "flags.json"), 'w') as fout:
-        json.dump(FLAGS.__flags, fout)
+    # print(vars(FLAGS))
+    # with open(os.path.join(FLAGS.log_dir, "flags.json"), 'w') as fout:
+    #     json.dump(FLAGS.__flags, fout)
 
     # ========= Load Dataset =========
     # You can change this code to load dataset in your own way
 
     dev_dirname = os.path.dirname(os.path.abspath(FLAGS.dev_path))
     dev_filename = os.path.basename(FLAGS.dev_path)
-    context_data, question_data, question_uuid_data = prepare_dev(dev_dirname, dev_filename, vocab)
-    dataset = (context_data, question_data, question_uuid_data)
+    context_data, raw_context_data, question_data, question_uuid_data = prepare_dev(dev_dirname, dev_filename, vocab)
+
+    # preprocess data by truncating
+    p = map(lambda line: map(int, (line.strip()).split(' ')),
+            context_data)
+    q = map(lambda line: map(int, (line.strip()).split(' ')),
+            question_data)
+    raw_context_data = map(lambda line: (line.strip()).split(' '),
+            raw_context_data)
+    max_len_p = min(max(map(len, p)), FLAGS.output_size)
+    max_len_q = max(map(len, q))
+
+    dataset = (p, raw_context_data, q, question_uuid_data)
+    #dataset = (context_data, raw_context_data, question_data, question_uuid_data)
+
+    # Reload flags 
+    print("loaded flags", vars(FLAGS))
 
     # ========= Model-specific =========
     # You must change the following code to adjust to your model
 
-    encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
-    decoder = Decoder(output_size=FLAGS.output_size)
+    encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size,
+            flags=FLAGS,
+            max_len_p=max_len_p, max_len_q=max_len_q)
+    decoder = Decoder(output_size=FLAGS.output_size,flags=FLAGS)
 
-    qa = QASystem(encoder, decoder)
+    qa = QASystem(encoder, decoder, glove, max_len_p, max_len_q, FLAGS)
+    # create saver
+    qa.saver = tf.train.Saver()
 
     with tf.Session() as sess:
         train_dir = get_normalized_train_dir(FLAGS.train_dir)
