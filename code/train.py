@@ -188,7 +188,9 @@ def main(_):
 
     if not os.path.exists(FLAGS.log_dir):
         os.makedirs(FLAGS.log_dir)
-    file_handler = logging.FileHandler(pjoin(FLAGS.log_dir, "log.txt"))
+    FLAGS.sessname = datetime.now()
+    file_handler = logging.FileHandler(pjoin(FLAGS.log_dir,
+                        "log{}.txt".format(sessname)))
     logging.getLogger().addHandler(file_handler)
 
     print(vars(FLAGS))

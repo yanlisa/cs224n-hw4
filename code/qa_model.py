@@ -848,7 +848,7 @@ class QASystem(object):
                         self.config.train_dir))
                     self.saver.save(sess,
                             os.path.join(self.config.train_dir,
-                                'model.weights'))
+                                'model{}.weights'.format(self.config.sessname)))
     # Lisa
     # from assignment3/ner_model.py
     def run_epoch(self, sess, train_set, dev_set):
@@ -871,7 +871,7 @@ class QASystem(object):
                     self.config.train_dir))
                 self.saver.save(sess,
                         os.path.join(self.config.train_dir,
-                            'model.weights'))
+                            'model{}.weights'.format(self.config.sessname)))
         print("")
         f1, em = self.evaluate_answer(sess, train_set, log=True)
         print("After epoch: F1: {}, EM: {}, for {} samples".format(f1, em, 100))
