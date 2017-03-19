@@ -20,7 +20,7 @@ logger.setLevel(logging.DEBUG)
 logging.basicConfig(format='%s(levelname)s:%s(message)s', level=logging.INFO)
 
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
-tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_float("dropout", 0.85, "Fraction of units randomly *NOT* dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_integer("batch_size", 40, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 100, "Size of each model layer.")
@@ -29,6 +29,7 @@ tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocab
 tf.app.flags.DEFINE_integer("perspective_size", 50, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
+tf.app.flags.DEFINE_integer("train_set_size", -1, "size of training set")
 tf.app.flags.DEFINE_string("load_train_dir", "", "Training directory to load model parameters from to resume training (default: {train_dir}).")
 tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (default: ./log)")
 tf.app.flags.DEFINE_string("optimizer", "adam", "adam / sgd")
@@ -115,8 +116,7 @@ def main(_):
             preprocess_data((val_p, val_q, val_ans), "val",
                 max_len_p, max_len_q)
 
-    t_len = 100
-    t_len = -1
+    t_len = FLAGS.train_set_size
     if t_len != -1: # minibatch to check overfitting
         train_dataset = zip(train_padded_p[:t_len], train_mask_p[:t_len],
     	                train_padded_q[:t_len], train_mask_q[:t_len], train_ans[:t_len])

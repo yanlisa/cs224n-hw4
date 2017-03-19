@@ -418,10 +418,10 @@ class Decoder(object):
                 W_end.get_shape(), a_end.get_shape()))
             self.y_st = tf.matmul(a_st, W_st) + b_st
             self.y_end = tf.matmul(a_end, W_end) + b_end
-            self.y_st = tf.Print(self.y_st, [self.y_st],
-                    message="y_st pre softmax")
-            self.y_end = tf.Print(self.y_end, [self.y_end],
-                    message="y_end pre softmax")
+            # self.y_st = tf.Print(self.y_st, [self.y_st],
+            #         message="y_st pre softmax")
+            # self.y_end = tf.Print(self.y_end, [self.y_end],
+            #         message="y_end pre softmax")
 
         return (self.y_st, self.y_end)
 
@@ -614,18 +614,22 @@ class QASystem(object):
                     [self.end_placeholder],
                     message="expected ends",
                     summarize=self.config.batch_size)
-            self.yp = tf.Print(self.yp, [tf.argmax(self.yp, 1)],
-                    message="guessed starts",
-                    summarize=self.config.batch_size)
-            self.yp2 = tf.Print(self.yp2, [tf.argmax(self.yp2, 1)],
-                    message="guessed ends",
+            self.yp2 = tf.Print(self.yp2, [self.mask_p_placeholder],
+                    message="mask lens",
                     summarize=self.config.batch_size)
 
             yp_mask = self.exp_mask(self.yp, self.mask_p_seq)
-            batch_softmax_st = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=self.st_inds, logits=yp_mask)
+            yp_mask = tf.Print(yp_mask, [tf.argmax(yp_mask, 1)],
+                    message="guessed starts",
+                    summarize=self.config.batch_size)
 
             yp2_mask = self.exp_mask(self.yp2, self.mask_p_seq)
+            yp2_mask = tf.Print(yp2_mask, [tf.argmax(yp2_mask, 1)],
+                    message="guessed ends",
+                    summarize=self.config.batch_size)
+
+            batch_softmax_st = tf.nn.sparse_softmax_cross_entropy_with_logits(
+                labels=self.st_inds, logits=yp_mask)
             batch_softmax_end = tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=self.end_inds, logits=yp2_mask)
             # logger.info("len st and end", len(st_batch), len(end_batch), len(ans_batch))
