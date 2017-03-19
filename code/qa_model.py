@@ -983,7 +983,9 @@ class QASystem(object):
                         self.config.train_dir))
                     self.saver.save(sess,
                             os.path.join(self.config.train_dir,
-                                'model{}.weights'.format(self.config.sessname)))
+                                'model{}.weights'.format(self.config.sessname)),
+                            latest_filename='checkpoint{}'.format(
+                                self.config.sessname))
     # Lisa
     # from assignment3/ner_model.py
     def run_epoch(self, sess, train_set, dev_set):
