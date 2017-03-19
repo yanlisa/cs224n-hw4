@@ -63,6 +63,7 @@ class Encoder(object):
                  It can be context-level representation, word-level representation,
                  or both.
         """
+        logging.info(">>>bilstm encode")
         # initial_state_fw, initial_state_bw
         # time_major=False: [batch_size, max_time, cell_fw.output_size]
         cell = tf.nn.rnn_cell.BasicLSTMCell(self.size,
@@ -82,6 +83,7 @@ class Encoder(object):
     def cnn_encode(self, inputs, masks, seq_len, encoder_state_input, reuse=False):
         """Calls cnn encoding and does things
         """
+        logging.info(">>>cnn encode")
         # [?, seq_len, embedding_size] (all padded)
         embedding_size = inputs.get_shape()[-1]
         logging.info("embed size {}, seq len {}".format(embedding_size, seq_len))
@@ -105,8 +107,8 @@ class Encoder(object):
                 highway_layers = 1
                 hw_output = highway(cnn_output, cnn_output.get_shape()[1],
                         highway_layers, 0)
-            logging.info("conv layer {} final {}".format(idx, hw_output.get_shape()))
             hw_output = tf.reshape(hw_output, [-1,seq_len, num_features])
+            logging.info("conv layer {} final {}".format(idx, hw_output.get_shape()))
             layers.append(hw_output)
             input_ = hw_output
         
@@ -131,6 +133,7 @@ class Encoder(object):
         return cnn_output
 
     def mp_filter(self, p_context, q_query):
+        logging.info(">>>mp_filter")
         """
         Before encoding, do some filtering on the embeddings.
         p_j = r_j * p_j
@@ -158,6 +161,7 @@ class Encoder(object):
         
 
     def basic_attention(self, p_context, q_query):
+        logging.info(">>>basic_attention")
         # for each context word, figure out how q_query influences
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         with tf.variable_scope("basic_attention"):
@@ -197,6 +201,7 @@ class Encoder(object):
         return p_attn
 
     def mix_attention(self, p_context, q_query):
+        logging.info(">>>mix_attention")
         # p_context and q_query are simple concats of fw and bw, so
         # they are 2*self.size in dimension
         # p q^t = [?,p_len,200] * [?, 200, q_len] = [?, p_len, q_len]
@@ -220,6 +225,7 @@ class Encoder(object):
         return p_attn
 
     def mp_attention(self, p_context, q_query, q_out):
+        logging.info(">>>mp_attention")
         # for each context word, figure out how q_query influences
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         p_fw, p_bw = p_context
@@ -339,6 +345,7 @@ class Encoder(object):
 
     def cnn_attention(self, p_context, p_masks, cnn_q):
         # cnn_q: [?,q_len]
+        logging.info(">>>cnn attention")
         q_size = cnn_q.get_shape().as_list()[1]
         # p_context: [?,max_p_len,self.size]
         # for each context word, figure out how q_query influences
@@ -413,6 +420,7 @@ class Decoder(object):
         :return:
         """
 
+        logging.info(">>>basic decode")
         # 2 for either st or end
         # time_major=False: [batch_size, max_time, 2]
         cell = tf.nn.rnn_cell.BasicLSTMCell(2, state_is_tuple=True)
@@ -453,6 +461,7 @@ class Decoder(object):
         return (self.y_st, self.y_end)
 
     def mix_decode(self, knowledge_rep,masks=None):
+        logging.info(">>>mix decode")
         # 2 for either st or end
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         with tf.variable_scope("mix_decode_st"):
@@ -483,6 +492,7 @@ class Decoder(object):
         return (self.y_st, self.y_end)
 
     def mp_decode(self, knowledge_rep, masks=None):
+        logging.info(">>>mp decode")
         cell = tf.nn.rnn_cell.BasicLSTMCell(self.config.state_size, state_is_tuple=True)
         cell = tf.nn.rnn_cell.DropoutWrapper(cell,
                 input_keep_prob=self.dropout_placeholder,
@@ -574,7 +584,7 @@ class QASystem(object):
         """
         # (None, max_len_p, hidden_size)
         # returns tuple[fw, bw], not concatenated
-        if self.use_mp or self.use_cnn:
+        if self.use_mp:
             encode_p = self.encoder.mp_filter(self.p_embeddings, self.q_embeddings)
         if not self.use_cnn:
             encode_p, encode_out_p = self.encoder.encode(self.p_embeddings,
