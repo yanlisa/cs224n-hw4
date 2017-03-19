@@ -160,22 +160,22 @@ class Encoder(object):
         return new_context
         
 
-    def basic_attention(self, p_context, q_query):
+    def basic_attention(self, p_context, q_query, p_size, q_size, output_size):
         logging.info(">>>basic_attention")
         # for each context word, figure out how q_query influences
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         with tf.variable_scope("basic_attention"):
             #tf.get_variable_scope().reuse_variables()
             W_a = tf.get_variable("W_a",
-                shape=(2*self.size, 2*self.size),
+                    shape=(q_size, output_size),
                 initializer=xavier_initializer)
             W_b = tf.get_variable("W_b",
-                shape=(4*self.size, 2*self.size),
+                    shape=(p_size, output_size)
                 initializer=xavier_initializer)
             # q * W_a
-            q_reshape = tf.reshape(q_query, [-1, 2*self.size])
+            q_reshape = tf.reshape(q_query, [-1, q_size])
             scores = tf.matmul(q_reshape, W_a)
-            scores = tf.reshape(scores, [-1, self.max_len_q, 2*self.size])
+            scores = tf.reshape(scores, [-1, self.max_len_q, output_size])
             # scores = p * (q * W_a)^T
             # [batch_size, p_len, q_len] 
             scores = tf.matmul(p_context, scores, transpose_b=True)
@@ -195,9 +195,9 @@ class Encoder(object):
             p_c = tf.concat(2, [context_attn, p_context])
             # [batch_size, p_len, 2d]
             # p_c_attn * W_b
-            p_c_reshape = tf.reshape(p_c, [-1, 4*self.size])
+            p_c_reshape = tf.reshape(p_c, [-1, p_size])
             p_attn = tf.matmul(p_c_reshape, W_b)
-            p_attn = tf.reshape(p_attn, [-1, self.max_len_p, 2*self.size])
+            p_attn = tf.reshape(p_attn, [-1, self.max_len_p, output_size])
         return p_attn
 
     def mix_attention(self, p_context, q_query):
@@ -610,13 +610,17 @@ class QASystem(object):
             encode_q = cnn_q
 
         if self.use_basic:
-            attn_p = self.encoder.basic_attention(encode_p, encode_q)
+            attn_p = self.encoder.basic_attention(encode_p, encode_q,
+                    4*self.config.output_size, 2*self.config.output_size,
+                    2*self.config.output_size)
         elif self.use_mp:
             attn_p = self.encoder.mp_attention(encode_p, encode_q, encode_out_q)
         elif self.use_mix:
             attn_p = self.encoder.mix_attention(encode_p, encode_q)
         elif self.use_cnn:
-            attn_p = self.encoder.basic_attention(encode_p, encode_q)
+            attn_p = self.encoder.basic_attention(encode_p, encode_q,
+                    self.config.output_size, self.config.output_size,
+                    self.config.output_size)
             # attn_p = self.encoder.cnn_attention(encode_p, 
             #         self.mask_p_placeholder, cnn_q)
         logger.info("attn_p {}".format(attn_p.get_shape()))
