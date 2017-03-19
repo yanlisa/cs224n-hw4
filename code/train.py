@@ -34,7 +34,7 @@ tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (
 tf.app.flags.DEFINE_string("optimizer", "adam", "adam / sgd")
 tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per print.")
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
-tf.app.flags.DEFINE_integer("model_type", 1, "basic: 0, multiperspective: 1, mix: 2")
+tf.app.flags.DEFINE_integer("model_type", 3, "basic: 0, multiperspective: 1, mix: 2, cnn: 3")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 tf.app.flags.DEFINE_boolean("clip_gradients",True, "Clip gradients")
@@ -101,7 +101,7 @@ def main(_):
     train_p, raw_train_p, train_q, train_ans = \
             load_dataset("train", FLAGS.data_dir)
     val_p, raw_val_p, val_q, val_ans = \
-            load_dataset("train", FLAGS.data_dir)
+            load_dataset("val", FLAGS.data_dir)
 
     max_len_p = max(max(map(len, train_p)), max(map(len, val_p)))
     max_len_p = FLAGS.output_size # truncate

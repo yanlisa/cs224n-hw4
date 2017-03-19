@@ -11,6 +11,8 @@ from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
 from util import Progbar, minibatches, ConfusionMatrix, get_substring
+from cnn import TDNN
+from cnn.ops import highway, batch_norm
 
 from evaluate import exact_match_score, f1_score
 
@@ -76,6 +78,32 @@ class Encoder(object):
                     inputs, sequence_length=masks, dtype=tf.float32)
 
         return [fw, bw], out_tuple
+
+    def cnn_encode(self, inputs, masks, encoder_state_input, reuse=False):
+        """Calls cnn encoding and does things
+        """
+        # [?, seq_len, embedding_size] (all padded)
+        embedding_size = inputs.get_shape()[-1]
+        with tf.variable_scope("cnn"):
+            # use default feature maps and kernels from TDNN
+            word_cnn = TDNN(inputs,embedding_size)
+        cnn_output = word_cnn.output
+        print("cnn", cnn_output.get_shape())
+
+        use_bn = True
+        if use_bn:
+            logging.info("batch norming post CNN")
+            bn = batch_norm()
+            norm_output = bn(tf.expand_dims(tf.expand_dims(cnn_output, 1), 1))
+            cnn_output = tf.squeeze(norm_output, [1,2])
+
+        # use highway, because why not
+        with tf.variable_scope("highway"):
+            highway_layers = 2
+            hw_output = highway(cnn_output, cnn_output.get_shape()[1],
+                    highway_layers, 0)
+        print("highway", hw_output.get_shape())
+        return hw_output
 
     def mp_filter(self, p_context, q_query):
         """
@@ -284,6 +312,59 @@ class Encoder(object):
         logger.info("shape of cosine {}".format(m.get_shape()))
         return m
 
+    def cnn_attention(self, p_context, p_masks, cnn_q):
+        # cnn_q: [?,q_len]
+        q_size = cnn_q.get_shape().as_list()[1]
+        # p_context: [?,max_p_len,self.size]
+        # for each context word, figure out how q_query influences
+        xavier_initializer = tf.contrib.layers.xavier_initializer()
+        with tf.variable_scope("cnn_attention"):
+            #tf.get_variable_scope().reuse_variables()
+            W_q = tf.get_variable("W_q",
+                shape=(q_size, self.size),
+                initializer=xavier_initializer)
+            W_q_q = tf.expand_dims(tf.matmul(cnn_q, W_q), 1)
+            # [?,1,self.size]
+            print("W_q_q", W_q_q.get_shape())
+
+            W_p = tf.get_variable("W_p",
+                shape=(2*self.size, self.size),
+                initializer=xavier_initializer)
+            b_p = tf.get_variable("b_p",
+                shape=(self.size,),
+                initializer=tf.constant_initializer(0))
+            W_p = tf.expand_dims(W_p, 0)
+            W_p_p = tf.batch_matmul(p_context, W_p) + b_p
+            # [?,max_p_len,self.size]
+            G_p = tf.tanh(W_q_q + W_p_p)
+            W_scores = tf.get_variable("W_scores",
+                shape=(self.size, 2*self.size),
+                initializer=xavier_initializer)
+            W_scores = tf.expand_dims(W_scores, 0)
+            b_scores = tf.get_variable("b_scores",
+                shape=(2*self.size,),
+                initializer=tf.constant_initializer(0))
+            # [?,max_p_len,2*self.size]
+            scores = tf.nn.softmax(tf.batch_matmul(G_p, W_scores) + b_scores)
+
+        # [?,max_p_len,4*self.size]
+        p_scores = tf.concat(2, [tf.mul(p_context, scores), p_context])
+
+        # another lstm
+        cell = tf.nn.rnn_cell.BasicLSTMCell(self.size, state_is_tuple=True)
+        cell = tf.nn.rnn_cell.DropoutWrapper(cell,
+                input_keep_prob=self.dropout_placeholder,
+                output_keep_prob=self.dropout_placeholder)
+        with tf.variable_scope("cnn_attn"):
+            p_attn, _ = tf.nn.bidirectional_dynamic_rnn(cell, cell,
+                    p_scores,
+                    sequence_length=p_masks,
+                    dtype=tf.float32)
+        # [?,max_p_len,2*self.size]
+        p_attn = tf.concat(2, p_attn)
+        print("p_attn", p_attn.get_shape())
+        return p_attn
+
 class Decoder(object):
     def __init__(self, output_size, flags=None):
         self.output_size = output_size
@@ -434,6 +515,7 @@ class QASystem(object):
         self.use_basic = self.config.model_type == 0
         self.use_mp = self.config.model_type == 1
         self.use_mix = self.config.model_type == 2
+        self.use_cnn = self.config.model_type == 3
 
         # ==== assemble pieces ====
         with tf.variable_scope("qa", initializer=tf.uniform_unit_scaling_initializer(1.0)):
@@ -455,15 +537,20 @@ class QASystem(object):
         """
         # (None, max_len_p, hidden_size)
         # returns tuple[fw, bw], not concatenated
-        if self.use_mp:
+        if self.use_mp or self.use_cnn:
             encode_p = self.encoder.mp_filter(self.p_embeddings, self.q_embeddings)
         encode_p, encode_out_p = self.encoder.encode(self.p_embeddings,
                 self.mask_p_placeholder, None)
         encode_q, encode_out_q = self.encoder.encode(self.q_embeddings,
                 self.mask_q_placeholder, None, reuse=True)
-        if self.use_basic or self.use_mix:
+        if self.use_cnn:
+            cnn_q = self.encoder.cnn_encode(self.q_embeddings,
+                self.mask_q_placeholder, None)
+        print("cnn_q", cnn_q.get_shape())
+        if self.use_basic or self.use_mix or self.use_cnn:
             encode_p = tf.concat(2, encode_p)
-            encode_q = tf.concat(2, encode_q)
+        if self.use_basic or self.use_mix:
+            encode_q = tf.concat(2, encode_q + [cnn_q])
 
         if self.use_basic:
             attn_p = self.encoder.basic_attention(encode_p, encode_q)
@@ -471,6 +558,9 @@ class QASystem(object):
             attn_p = self.encoder.mp_attention(encode_p, encode_q, encode_out_q)
         elif self.use_mix:
             attn_p = self.encoder.mix_attention(encode_p, encode_q)
+        elif self.use_cnn:
+            attn_p = self.encoder.cnn_attention(encode_p, 
+                    self.mask_p_placeholder, cnn_q)
         logger.info("attn_p {}".format(attn_p.get_shape()))
 
         # encoded p, attention p, and elt-wise mult of the two
@@ -482,7 +572,7 @@ class QASystem(object):
         logger.info("mask_p_placeholder {}".format(self.mask_p_placeholder.get_shape()))
 
         # [None,], [None,] (length is length of batch)
-        if self.use_basic:
+        if self.use_basic or self.use_cnn:
             self.yp, self.yp2 = self.decoder.basic_decode(encode_context,
                     masks=self.mask_p_placeholder) # start, end
         elif self.use_mp:
