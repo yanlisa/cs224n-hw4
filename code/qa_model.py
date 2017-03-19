@@ -986,6 +986,9 @@ class QASystem(object):
                                 'model{}.weights'.format(self.config.sessname)),
                             latest_filename='checkpoint{}'.format(
                                 self.config.sessname))
+            if epoch != 0:
+                self.config.learning_rate /= 2.0
+                logger.info("Reducing learning rate: {}".format(self.config.learning_rate))
     # Lisa
     # from assignment3/ner_model.py
     def run_epoch(self, sess, train_set, dev_set):
