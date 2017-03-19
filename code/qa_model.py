@@ -89,7 +89,7 @@ class Encoder(object):
         logging.info("embed size {}, seq len {}".format(embedding_size, seq_len))
 
         kernels = [3,4,5,6]
-        num_features = 50
+        num_features = 25
         input_ = inputs
         layers = []
         for idx, kernel_dim in enumerate(kernels):
