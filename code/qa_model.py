@@ -12,7 +12,7 @@ import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
 from util import Progbar, minibatches, ConfusionMatrix, get_substring
 from cnn import TDNN
-from cnn.ops import highway, batch_norm
+from cnn.ops import highway, batch_norm, conv2d
 
 from evaluate import exact_match_score, f1_score
 
@@ -79,31 +79,56 @@ class Encoder(object):
 
         return [fw, bw], out_tuple
 
-    def cnn_encode(self, inputs, masks, encoder_state_input, reuse=False):
+    def cnn_encode(self, inputs, masks, seq_len, encoder_state_input, reuse=False):
         """Calls cnn encoding and does things
         """
         # [?, seq_len, embedding_size] (all padded)
         embedding_size = inputs.get_shape()[-1]
-        with tf.variable_scope("cnn"):
-            # use default feature maps and kernels from TDNN
-            word_cnn = TDNN(inputs,embedding_size)
-        cnn_output = word_cnn.output
-        print("cnn", cnn_output.get_shape())
+        logging.info("embed size {}, seq len {}".format(embedding_size, seq_len))
 
-        use_bn = True
-        if use_bn:
-            logging.info("batch norming post CNN")
-            bn = batch_norm()
-            norm_output = bn(tf.expand_dims(tf.expand_dims(cnn_output, 1), 1))
-            cnn_output = tf.squeeze(norm_output, [1,2])
+        kernels = [3,4,5,6]
+        num_features = 50
+        input_ = inputs
+        layers = []
+        for idx, kernel_dim in enumerate(kernels):
+            input_ = tf.expand_dims(inputs,-1)
+            conv = conv2d(input_,num_features, kernel_dim, embedding_size,
+                    name="kernellayer%d" % idx,
+                    padding="SAME")
+            # [?, seq_len, 1, num_features]
+            logging.info("layer {} conv shape (kernel {}, feature {}): {}".format(
+                idx, kernel_dim, num_features, conv.get_shape()))
+            conv_relu = tf.nn.relu(tf.transpose(conv, perm=[0,1,3,2]))
 
-        # use highway, because why not
-        with tf.variable_scope("highway"):
-            highway_layers = 2
-            hw_output = highway(cnn_output, cnn_output.get_shape()[1],
-                    highway_layers, 0)
-        print("highway", hw_output.get_shape())
-        return hw_output
+            cnn_output = tf.reshape(conv_relu, [-1, seq_len * num_features])
+            with tf.variable_scope("highway%d" % idx):
+                highway_layers = 1
+                hw_output = highway(cnn_output, cnn_output.get_shape()[1],
+                        highway_layers, 0)
+            logging.info("conv layer {} final {}".format(idx, hw_output.get_shape()))
+            hw_output = tf.reshape(hw_output, [-1,seq_len, num_features])
+            layers.append(hw_output)
+            input_ = hw_output
+        
+        # # the normal one from
+        # # https://arxiv.org/pdf/1508.06615.pdf
+        # # word_cnn = TDNN(inputs,embedding_size)
+        # # cnn_output = word_cnn.output
+        # cnn_output = input_
+        # logging.info("cnn {}".format(cnn_output.get_shape()))
+
+        # # can't use batchnorm with 4d arguments
+        # # use_bn = True
+        # # if use_bn:
+        # #     logging.info("batch norming post CNN")
+        # #     bn = batch_norm()
+        # #     norm_output = bn(tf.expand_dims(tf.expand_dims(cnn_output, 1), 1))
+        # #     cnn_output = tf.squeeze(norm_output, [1,2])
+
+        # # use highway, because why not
+        cnn_output = tf.concat(2, layers)
+        logging.info("final shape of conv {}".format(cnn_output.get_shape()))
+        return cnn_output
 
     def mp_filter(self, p_context, q_query):
         """
@@ -346,7 +371,9 @@ class Encoder(object):
             # [?,max_p_len,2*self.size]
             G_p_W = tf.matmul(tf.reshape(G_p, [-1, self.size]), W_scores)
             G_p_W = tf.reshape(G_p_W, [-1, self.max_len_p, 2*self.size])
-            scores = tf.nn.softmax(G_p_W + b_scores)
+            scores = tf.nn.softmax(G_p_W + b_scores, 1)
+            logging.info("scores{}".format(scores.get_shape()))
+            scores = tf.Print(scores, [tf.reduce_sum(scores, 1)], message="norm on dim 1?")
 
         # [?,max_p_len,4*self.size]
         p_scores = tf.concat(2, [tf.mul(p_context, scores), p_context])
@@ -549,18 +576,28 @@ class QASystem(object):
         # returns tuple[fw, bw], not concatenated
         if self.use_mp or self.use_cnn:
             encode_p = self.encoder.mp_filter(self.p_embeddings, self.q_embeddings)
-        encode_p, encode_out_p = self.encoder.encode(self.p_embeddings,
-                self.mask_p_placeholder, None)
-        encode_q, encode_out_q = self.encoder.encode(self.q_embeddings,
+        if not self.use_cnn:
+            encode_p, encode_out_p = self.encoder.encode(self.p_embeddings,
+                    self.mask_p_placeholder, None)
+            encode_q, encode_out_q = self.encoder.encode(self.q_embeddings,
                 self.mask_q_placeholder, None, reuse=True)
         if self.use_cnn:
-            cnn_q = self.encoder.cnn_encode(self.q_embeddings,
-                self.mask_q_placeholder, None)
+            logging.info("cnn encode for p")
+            with tf.variable_scope("cnn_p"):
+                cnn_p = self.encoder.cnn_encode(self.p_embeddings,
+                    self.mask_p_placeholder, self.max_len_p, None)
+            logging.info("cnn encode for q")
+            with tf.variable_scope("cnn_q"):
+                cnn_q = self.encoder.cnn_encode(self.q_embeddings,
+                    self.mask_q_placeholder, self.max_len_q, None)
         print("cnn_q", cnn_q.get_shape())
-        if self.use_basic or self.use_mix or self.use_cnn:
+        if self.use_basic or self.use_mix:
             encode_p = tf.concat(2, encode_p)
         if self.use_basic or self.use_mix:
             encode_q = tf.concat(2, encode_q + [cnn_q])
+        if self.use_cnn:
+            encode_p = cnn_p
+            encode_q = cnn_q
 
         if self.use_basic:
             attn_p = self.encoder.basic_attention(encode_p, encode_q)
@@ -569,8 +606,9 @@ class QASystem(object):
         elif self.use_mix:
             attn_p = self.encoder.mix_attention(encode_p, encode_q)
         elif self.use_cnn:
-            attn_p = self.encoder.cnn_attention(encode_p, 
-                    self.mask_p_placeholder, cnn_q)
+            attn_p = self.encoder.basic_attention(encode_p, encode_q)
+            # attn_p = self.encoder.cnn_attention(encode_p, 
+            #         self.mask_p_placeholder, cnn_q)
         logger.info("attn_p {}".format(attn_p.get_shape()))
 
         # encoded p, attention p, and elt-wise mult of the two

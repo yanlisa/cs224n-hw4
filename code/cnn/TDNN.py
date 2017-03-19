@@ -23,7 +23,7 @@ class TDNN(Model):
 
     # [batch_size x seq_length x embed_dim x 1]
     input_ = tf.expand_dims(input_, -1)
-    print("TDNN:input shape", input_.get_shape())
+    #print("TDNN:input shape", input_.get_shape())
 
     layers = []
     for idx, kernel_dim in enumerate(kernels):
@@ -32,6 +32,7 @@ class TDNN(Model):
       # [batch_size x seq_length x embed_dim x feature_map_dim]
       conv = conv2d(input_, feature_maps[idx], kernel_dim , self.embed_dim,
                     name="kernel%d" % idx)
+      #print("after conv for {}, {}:{}".format(idx, kernel_dim, conv.get_shape()))
 
       # [batch_size x 1 x 1 x feature_map_dim]
       pool = tf.nn.max_pool(tf.tanh(conv), [1, reduced_length, 1, 1], [1, 1, 1, 1], 'VALID')
