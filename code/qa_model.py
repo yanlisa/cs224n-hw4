@@ -325,7 +325,6 @@ class Encoder(object):
                 initializer=xavier_initializer)
             W_q_q = tf.expand_dims(tf.matmul(cnn_q, W_q), 1)
             # [?,1,self.size]
-            print("W_q_q", W_q_q.get_shape())
 
             W_p = tf.get_variable("W_p",
                 shape=(2*self.size, self.size),
@@ -333,19 +332,21 @@ class Encoder(object):
             b_p = tf.get_variable("b_p",
                 shape=(self.size,),
                 initializer=tf.constant_initializer(0))
-            W_p = tf.expand_dims(W_p, 0)
-            W_p_p = tf.batch_matmul(p_context, W_p) + b_p
+            p_reshape = tf.reshape(p_context, [-1, 2*self.size])
+            W_p_p = tf.matmul(p_reshape, W_p)
+            W_p_p = tf.reshape(W_p_p, [-1, self.max_len_p, self.size]) + b_p
             # [?,max_p_len,self.size]
             G_p = tf.tanh(W_q_q + W_p_p)
             W_scores = tf.get_variable("W_scores",
                 shape=(self.size, 2*self.size),
                 initializer=xavier_initializer)
-            W_scores = tf.expand_dims(W_scores, 0)
             b_scores = tf.get_variable("b_scores",
                 shape=(2*self.size,),
                 initializer=tf.constant_initializer(0))
             # [?,max_p_len,2*self.size]
-            scores = tf.nn.softmax(tf.batch_matmul(G_p, W_scores) + b_scores)
+            G_p_W = tf.matmul(tf.reshape(G_p, [-1, self.size]), W_scores)
+            G_p_W = tf.reshape(G_p_W, [-1, self.max_len_p, 2*self.size])
+            scores = tf.nn.softmax(G_p_W + b_scores)
 
         # [?,max_p_len,4*self.size]
         p_scores = tf.concat(2, [tf.mul(p_context, scores), p_context])
