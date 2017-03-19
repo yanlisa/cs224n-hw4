@@ -164,7 +164,7 @@ def main(_):
         qa.train(sess, dataset, save_train_dir)
 
         #qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
-        f1, em = qa.evaluate_answer(sess, train_set, log=True)
+        f1, em = qa.evaluate_answer(sess, train_dataset, log=True)
         logger.info("final evaluation: F1: {}, EM: {}".format(f1, em))
 
 if __name__ == "__main__":

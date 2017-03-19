@@ -418,6 +418,10 @@ class Decoder(object):
                 W_end.get_shape(), a_end.get_shape()))
             self.y_st = tf.matmul(a_st, W_st) + b_st
             self.y_end = tf.matmul(a_end, W_end) + b_end
+            self.y_st = tf.Print(self.y_st, [self.y_st],
+                    message="y_st pre softmax")
+            self.y_end = tf.Print(self.y_end, [self.y_end],
+                    message="y_end pre softmax")
 
         return (self.y_st, self.y_end)
 
@@ -508,6 +512,11 @@ class QASystem(object):
                 shape=(None,)) # dim 2
         self.dropout_placeholder = tf.placeholder(tf.float32,
                 shape=())
+        # create boolean masks for softmaxing at end
+        self.mask_p_seq = tf.sequence_mask(self.mask_p_placeholder,
+                maxlen=self.max_len_p, dtype=tf.bool)
+        self.mask_q_seq = tf.sequence_mask(self.mask_q_placeholder,
+                maxlen=self.max_len_p, dtype=tf.bool)
         
         # let dropout be accessible from encoder and decoder.
         self.encoder.dropout_placeholder = self.dropout_placeholder
@@ -584,6 +593,9 @@ class QASystem(object):
                     masks=self.mask_p_placeholder) # start, end
         logger.info("self.yp {}, yp2 {}".format(self.yp, self.yp2))
 
+    def exp_mask(self, val, mask):
+        VERY_NEGATIVE_NUMBER = -1e30
+        return tf.add(val, (1 - tf.cast(mask, 'float')) * VERY_NEGATIVE_NUMBER)
 
     def setup_loss(self):
         """
@@ -609,11 +621,13 @@ class QASystem(object):
                     message="guessed ends",
                     summarize=self.config.batch_size)
 
+            yp_mask = self.exp_mask(self.yp, self.mask_p_seq)
             batch_softmax_st = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=self.st_inds, logits=self.yp)
+                labels=self.st_inds, logits=yp_mask)
 
+            yp2_mask = self.exp_mask(self.yp2, self.mask_p_seq)
             batch_softmax_end = tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=self.end_inds, logits=self.yp2)
+                labels=self.end_inds, logits=yp2_mask)
             # logger.info("len st and end", len(st_batch), len(end_batch), len(ans_batch))
             # Lisa: changed 3/17 to sum of average losses from each of these
             self.loss = tf.reduce_mean(batch_softmax_st + batch_softmax_end)
