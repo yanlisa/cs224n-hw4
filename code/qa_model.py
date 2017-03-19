@@ -90,6 +90,7 @@ class Encoder(object):
 
         kernels = [3,4,5,6]
         num_features = 25
+        use_highway = [False, False, False, False]
         input_ = inputs
         layers = []
         for idx, kernel_dim in enumerate(kernels):
@@ -98,19 +99,23 @@ class Encoder(object):
                     name="kernellayer%d" % idx,
                     padding="SAME")
             # [?, seq_len, 1, num_features]
+            conv_relu = tf.nn.relu(tf.squeeze(conv, [2]))
             logging.info("layer {} conv shape (kernel {}, feature {}): {}".format(
-                idx, kernel_dim, num_features, conv.get_shape()))
-            conv_relu = tf.nn.relu(tf.transpose(conv, perm=[0,1,3,2]))
+                idx, kernel_dim, num_features, conv_relu.get_shape()))
 
-            cnn_output = tf.reshape(conv_relu, [-1, seq_len * num_features])
-            with tf.variable_scope("highway%d" % idx):
-                highway_layers = 1
-                hw_output = highway(cnn_output, cnn_output.get_shape()[1],
-                        highway_layers, 0)
-            hw_output = tf.reshape(hw_output, [-1,seq_len, num_features])
-            logging.info("conv layer {} final {}".format(idx, hw_output.get_shape()))
-            layers.append(hw_output)
-            input_ = hw_output
+            if use_highway[idx]:
+                cnn_output = tf.reshape(conv_relu, [-1, seq_len * num_features])
+                with tf.variable_scope("highway%d" % idx):
+                    highway_layers = 1
+                    hw_output = highway(cnn_output, cnn_output.get_shape()[1],
+                            highway_layers, 0)
+                hw_output = tf.reshape(hw_output, [-1,seq_len, num_features])
+                logging.info("conv layer {} final {}".format(idx, hw_output.get_shape()))
+                conv_output = hw_output
+            else:
+                conv_output = conv_relu
+            layers.append(conv_output)
+            input_ = conv_output
         
         # # the normal one from
         # # https://arxiv.org/pdf/1508.06615.pdf
@@ -170,7 +175,7 @@ class Encoder(object):
                     shape=(q_size, output_size),
                 initializer=xavier_initializer)
             W_b = tf.get_variable("W_b",
-                    shape=(p_size, output_size)
+                    shape=(p_size, output_size),
                 initializer=xavier_initializer)
             # q * W_a
             q_reshape = tf.reshape(q_query, [-1, q_size])
@@ -178,6 +183,8 @@ class Encoder(object):
             scores = tf.reshape(scores, [-1, self.max_len_q, output_size])
             # scores = p * (q * W_a)^T
             # [batch_size, p_len, q_len] 
+            logging.info("p: {}, q*W_a: {},  output {}".format(
+                p_context.get_shape(), scores.get_shape(), output_size))
             scores = tf.matmul(p_context, scores, transpose_b=True)
             scores = tf.nn.softmax(scores) # normalize to 1
 
@@ -197,7 +204,7 @@ class Encoder(object):
             # p_c_attn * W_b
             p_c_reshape = tf.reshape(p_c, [-1, p_size])
             p_attn = tf.matmul(p_c_reshape, W_b)
-            p_attn = tf.reshape(p_attn, [-1, self.max_len_p, output_size])
+            p_attn = tf.reshape(p_attn, [-1, self.max_len_p, 2*output_size])
         return p_attn
 
     def mix_attention(self, p_context, q_query):
@@ -600,27 +607,26 @@ class QASystem(object):
             with tf.variable_scope("cnn_q"):
                 cnn_q = self.encoder.cnn_encode(self.q_embeddings,
                     self.mask_q_placeholder, self.max_len_q, None)
-        print("cnn_q", cnn_q.get_shape())
         if self.use_basic or self.use_mix:
             encode_p = tf.concat(2, encode_p)
         if self.use_basic or self.use_mix:
-            encode_q = tf.concat(2, encode_q + [cnn_q])
+            encode_q = tf.concat(2, encode_q)
         if self.use_cnn:
             encode_p = cnn_p
             encode_q = cnn_q
 
         if self.use_basic:
             attn_p = self.encoder.basic_attention(encode_p, encode_q,
-                    4*self.config.output_size, 2*self.config.output_size,
-                    2*self.config.output_size)
+                    4*self.config.state_size, 2*self.config.state_size,
+                    2*self.config.state_size)
         elif self.use_mp:
             attn_p = self.encoder.mp_attention(encode_p, encode_q, encode_out_q)
         elif self.use_mix:
             attn_p = self.encoder.mix_attention(encode_p, encode_q)
         elif self.use_cnn:
             attn_p = self.encoder.basic_attention(encode_p, encode_q,
-                    self.config.output_size, self.config.output_size,
-                    self.config.output_size)
+                    self.config.state_size, self.config.state_size,
+                    self.config.state_size)
             # attn_p = self.encoder.cnn_attention(encode_p, 
             #         self.mask_p_placeholder, cnn_q)
         logger.info("attn_p {}".format(attn_p.get_shape()))
@@ -647,6 +653,7 @@ class QASystem(object):
 
     def exp_mask(self, val, mask):
         VERY_NEGATIVE_NUMBER = -1e30
+        logging.info("cast mask shape {}".format(tf.cast(mask, 'float').get_shape()))
         return tf.add(val, (1 - tf.cast(mask, 'float')) * VERY_NEGATIVE_NUMBER)
 
     def setup_loss(self):
@@ -670,12 +677,17 @@ class QASystem(object):
                     message="mask lens",
                     summarize=self.config.batch_size)
 
+            # mask
             yp_mask = self.exp_mask(self.yp, self.mask_p_seq)
+            yp2_mask = self.exp_mask(self.yp2, self.mask_p_seq)
+            logging.info("yp shape{}".format(yp_mask.get_shape()))
+            # TODO:ignore mask
+            # yp_mask = self.yp
+            # yp2_mask = self.yp2
             yp_mask = tf.Print(yp_mask, [tf.argmax(yp_mask, 1)],
                     message="guessed starts",
                     summarize=self.config.batch_size)
 
-            yp2_mask = self.exp_mask(self.yp2, self.mask_p_seq)
             yp2_mask = tf.Print(yp2_mask, [tf.argmax(yp2_mask, 1)],
                     message="guessed ends",
                     summarize=self.config.batch_size)
