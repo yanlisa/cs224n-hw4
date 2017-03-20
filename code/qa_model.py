@@ -207,7 +207,9 @@ class Encoder(object):
             p_attn = tf.reshape(p_attn, [-1, self.max_len_p, 2*output_size])
         return p_attn
 
-    def mix_attention(self, p_context, q_query):
+    def mix_attention(self, p_context, q_query, p_size=-1):
+        if p_size == -1:
+            p_size = 2*self.size
         logging.info(">>>mix_attention")
         # p_context and q_query are simple concats of fw and bw, so
         # they are 2*self.size in dimension
@@ -220,13 +222,13 @@ class Encoder(object):
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         with tf.variable_scope("mix_attention"):
             W_1 = tf.get_variable("W_1",
-                shape=(4*self.size, self.size),
+                shape=(2*p_size, self.size),
                 initializer=xavier_initializer)
             b_1 = tf.get_variable("b_1",
                     shape=(self.size,),
                     initializer=tf.constant_initializer(0))
             cc_rs = tf.reshape(tf.concat(2, [p_context, p_mix]),
-                                [-1, 4*self.size])
+                                [-1, 2*p_size])
             cc_rs_W = tf.matmul(cc_rs, W_1)
             p_attn = tf.reshape(cc_rs_W, [-1, self.max_len_p, self.size]) + b_1
         return p_attn
@@ -556,6 +558,8 @@ class QASystem(object):
                 shape=(None,)) # dim 2
         self.dropout_placeholder = tf.placeholder(tf.float32,
                 shape=())
+        self.mu_placeholder = tf.placeholder(tf.float32,
+                shape=())
         # create boolean masks for softmaxing at end
         self.mask_p_seq = tf.sequence_mask(self.mask_p_placeholder,
                 maxlen=self.max_len_p, dtype=tf.bool)
@@ -624,9 +628,8 @@ class QASystem(object):
         elif self.use_mix:
             attn_p = self.encoder.mix_attention(encode_p, encode_q)
         elif self.use_cnn:
-            attn_p = self.encoder.basic_attention(encode_p, encode_q,
-                    self.config.state_size, self.config.state_size,
-                    self.config.state_size)
+            attn_p = self.encoder.mix_attention(encode_p, encode_q,
+                    p_size=self.config.state_size)
             # attn_p = self.encoder.cnn_attention(encode_p, 
             #         self.mask_p_placeholder, cnn_q)
         logger.info("attn_p {}".format(attn_p.get_shape()))
@@ -640,13 +643,13 @@ class QASystem(object):
         logger.info("mask_p_placeholder {}".format(self.mask_p_placeholder.get_shape()))
 
         # [None,], [None,] (length is length of batch)
-        if self.use_basic or self.use_cnn:
+        if self.use_basic:
             self.yp, self.yp2 = self.decoder.basic_decode(encode_context,
                     masks=self.mask_p_placeholder) # start, end
         elif self.use_mp:
             self.yp, self.yp2 = self.decoder.mp_decode(encode_context,
                     masks=self.mask_p_placeholder) # start, end
-        elif self.use_mix:
+        elif self.use_mix or self.use_cnn:
             self.yp, self.yp2 = self.decoder.mix_decode(encode_context,
                     masks=self.mask_p_placeholder) # start, end
         logger.info("self.yp {}, yp2 {}".format(self.yp, self.yp2))
@@ -698,7 +701,14 @@ class QASystem(object):
                 labels=self.end_inds, logits=yp2_mask)
             # logger.info("len st and end", len(st_batch), len(end_batch), len(ans_batch))
             # Lisa: changed 3/17 to sum of average losses from each of these
-            self.loss = tf.reduce_mean(batch_softmax_st + batch_softmax_end)
+
+            # constrain start < end
+            ans_st = tf.argmax(yp_mask,1)
+            ans_end = tf.argmax(yp2_mask,1)
+            pos_range = (ans_st - ans_end)
+            pos_range = tf.Print(pos_range, [pos_range], message="diff")
+            self.loss = tf.reduce_mean(batch_softmax_st + batch_softmax_end) + \
+                    self.mu_placeholder * tf.reduce_mean(tf.cast(pos_range, tf.float32))
 
     def setup_training(self):
         # self.train_op = \
@@ -755,7 +765,7 @@ class QASystem(object):
             logger.info("q shape {}".format(self.q_placeholder.get_shape()))
             logger.info("q embeddings shape {}".format(self.q_embeddings.get_shape()))
 
-    def create_feed_dict(self, p_batch, mask_p_batch, q_batch, mask_q_batch, ans_batch=None, dropout=1):
+    def create_feed_dict(self, p_batch, mask_p_batch, q_batch, mask_q_batch, ans_batch=None, dropout=1, mu=0.001):
         input_feed = {}
         input_feed[self.p_placeholder] = p_batch
         input_feed[self.mask_p_placeholder] = mask_p_batch
@@ -767,6 +777,7 @@ class QASystem(object):
             input_feed[self.end_placeholder] = end_batch
         #dropout = 1 # TODO: change and move to train.py
         input_feed[self.dropout_placeholder] = dropout
+        input_feed[self.mu_placeholder] = mu
         # logger.info("input_feed_dict {}, {}".format(
         #     len(input_feed), len(input_feed[self.p_placeholder])))
         return input_feed
@@ -780,7 +791,8 @@ class QASystem(object):
         p_batch, mask_p_batch, q_batch, mask_q_batch, ans_batch = data
         input_feed = self.create_feed_dict(p_batch, mask_p_batch,
                 q_batch, mask_q_batch, ans_batch=ans_batch,
-                dropout=self.config.dropout)
+                dropout=self.config.dropout,
+                mu=self.config.mu)
 
         #run_metadata = tf.Print(run_metadata, [run_metadata])
         output_feed = [self.train_op, self.loss, self.grad_norm]
@@ -893,6 +905,8 @@ class QASystem(object):
         raw_dataset = self.raw_train
         if not train_set:
             raw_dataset = self.raw_val
+        sample = min(sample, len(dataset)) # in case it's too small
+
         indices = np.arange(len(dataset))
         np.random.shuffle(indices)
         indices = indices[:sample]
@@ -907,7 +921,9 @@ class QASystem(object):
                     guess_st[i], guess_end[i])
             actual = get_substring(text_samples[i],
                     actual_st[i], actual_end[i])
-            #logger.info("prediction:{}, actual:{}".format(prediction, actual))
+            # logger.info("prediction:({},{}){}\nactual:({},{}){}".format(
+            #     guess_st[i], guess_end[i],prediction,
+            #     actual_st[i], actual_end[i], actual))
             f1 += f1_score(prediction, actual)
             em += exact_match_score(prediction, actual)
 
