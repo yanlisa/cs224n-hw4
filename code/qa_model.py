@@ -555,9 +555,10 @@ class Decoder(object):
                 input_keep_prob=self.dropout_placeholder,
                 output_keep_prob=self.dropout_placeholder)
         with tf.variable_scope("mix_decode_end"):
-            a_end, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,
-                    sequence_length=masks,
-                    dtype=tf.float32)
+            # a_end, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,
+            #         sequence_length=masks,
+            #         dtype=tf.float32)
+            a_end = self.cnn_encode(knowledge_rep, self.config.output_size, None)
             # each of dim [batch_size, max_time, output_size)]
             W_end = tf.get_variable("W_end",
                 (input_size,),
@@ -607,6 +608,7 @@ class QASystem(object):
         self.saver = None
         self.encoder = encoder
         self.decoder = decoder
+        self.decoder.cnn_encode = self.encoder.cnn_encode
         self.pretrained_embeddings = args[0]
         self.max_len_p = args[1]
         self.max_len_q = args[2]
@@ -910,10 +912,34 @@ class QASystem(object):
 
         yp, yp2 = self.decode(sess, test_x)
 
-        a_s = np.argmax(yp, axis=1)
-        a_e = np.argmax(yp2, axis=1)
+        yp_list = (yp).tolist()
+        yp2_list = (yp2).tolist()
+        batch_size = len(yp_list)
 
-        return (a_s, a_e)
+        spans = []
+        for i in range(len(yp_list)):
+            ypif, yp2if = yp_list[i], yp2_list[i]
+            best_st = 0
+            max_jp = 0 # max joint probability
+            best_span = (0, 1)
+            for j in range(len(ypif)):
+                p_st = ypif[best_st] # the default best prob
+                if ypif[j] > ypif[best_st]:
+                    best_st = j
+                    p_st = ypif[j]
+                p_end = yp2if[j]
+                if p_st * p_end > max_jp:
+                    best_span = (best_st, j+1)
+                    max_jp = p_st * p_end
+            spans.append(best_span)
+        return zip(*spans)
+
+
+        # greedy, has empty spans
+        # yp, yp2 = self.decode(sess, test_x)
+        # a_s = np.argmax(yp, axis=1)
+        # a_e = np.argmax(yp2, axis=1)
+        # return (a_s, a_e)
 
     def test(self, sess, val_data):
         """
@@ -994,6 +1020,13 @@ class QASystem(object):
         actual_st, actual_end = zip(*samples[-1])
         text_samples = [raw_dataset[i] for i in indices]
 
+
+        # # sanity check with argmax
+        # yp, yp2 = self.decode(sess, samples[:-1])
+        # a_s = np.argmax(yp, axis=1)
+        # a_e = np.argmax(yp2, axis=1)
+
+        # does runs
         guess_st, guess_end = self.answer(sess, samples[:-1])
         for i in range(sample):
             raw_par = text_samples[i]
@@ -1001,6 +1034,9 @@ class QASystem(object):
                     guess_st[i], guess_end[i])
             actual = get_substring(text_samples[i],
                     actual_st[i], actual_end[i])
+            # # logger.info("prediction argmax:({},{})".format(
+            # #     a_s[i], a_e[i], get_substring(text_samples[i],
+            # #         a_s[i], a_e[i])))
             # logger.info("prediction:({},{}){}\nactual:({},{}){}".format(
             #     guess_st[i], guess_end[i],prediction,
             #     actual_st[i], actual_end[i], actual))
@@ -1117,14 +1153,15 @@ class QASystem(object):
         # Lisa
         self.best_score = 0.
         train_set, val_set, raw_set = dataset
-        logger.info("train_set", len(train_set))
+        logger.info("train_set{}".format(len(train_set)))
+        logger.info("val_set {}".format(len(val_set)))
         self.raw_train, self.raw_val = raw_set
         for epoch in range(self.config.epochs):
             logger.info("Epoch %d out of %d", epoch+1, self.config.epochs)
             g = tf.get_default_graph()
             if epoch % 2 == 0 and epoch != 0:
                 # decrease every other epoch?
-                #self.config.learning_rate /= self.config.exp_reduce
+                self.config.learning_rate /= self.config.exp_reduce
                 logger.info("Reducing learning rate: {}".format(self.config.learning_rate))
             def dim_calc(tfshape):
                 is_none = False
@@ -1164,12 +1201,12 @@ class QASystem(object):
             if i % print_every == 1:
                 logger.info("Current batch:{}/{}, loss: {}, grad norm: {}".format(
                     i, int(len(train_set)/self.config.batch_size), loss, norms))
-                # logger.info("F1: {}, EM: {}".format(
                 f1, em = self.evaluate_answer(sess, train_set, log=True)
-                logger.info("F1: {}, EM: {}, for {} samples".format(f1, em, 100))
-		# logger.info("hello world")
-                # logger.info("F1: {}, EM: {}".format(
-                # 	self.evaluate_answer(sess, train_set, log=True)))
+                f1_val, em_val = self.evaluate_answer(sess, dev_set, log=True,
+                        train_set=False)
+
+                logger.info("Train F1: {}, EM: {}, for {} samples".format(f1, em, 100))
+                logger.info("Val F1: {}, EM: {}, for {} samples".format(f1_val, em_val, 100))
                 if f1 > self.best_score:
                     logger.info("New best score!")
                     self.best_score = f1
@@ -1181,7 +1218,10 @@ class QASystem(object):
                                     'model{}.weights'.format(self.config.sessname)))
         logger.info("")
         f1, em = self.evaluate_answer(sess, train_set, log=True)
-        logger.info("After epoch: F1: {}, EM: {}, for {} samples".format(f1, em, 100))
+        f1_val, em_val = self.evaluate_answer(sess, dev_set, log=True,
+                train_set=False)
+        logger.info("After epoch: Train F1: {}, EM: {}, for {} samples".format(f1, em, 100))
+        logger.info("After epoch: Val F1: {}, EM: {}, for {} samples".format(f1_val, em_val, 100))
 
         # TODO: implement validation on dev set.
         # from ner_model.py: self.evaluate(sess, dev_set)
