@@ -755,9 +755,9 @@ class QASystem(object):
                     [self.end_placeholder],
                     message="expected ends",
                     summarize=self.config.batch_size)
-            self.yp2 = tf.Print(self.yp2, [self.mask_p_placeholder],
-                    message="mask lens",
-                    summarize=self.config.batch_size)
+            # self.yp2 = tf.Print(self.yp2, [self.mask_p_placeholder],
+            #         message="mask lens",
+            #         summarize=self.config.batch_size)
 
             # mask
             yp_mask = self.exp_mask(self.yp, self.mask_p_seq)
@@ -1044,7 +1044,6 @@ class QASystem(object):
             em += exact_match_score(prediction, actual)
 
         avg_f1, avg_em = f1/float(sample), em/float(sample)
-        logger.info("f1 {}, em {}".format(avg_f1, avg_em))
         return avg_f1, avg_em
             
 
