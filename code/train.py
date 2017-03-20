@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logging.basicConfig(format='%s(levelname)s:%s(message)s', level=logging.INFO)
 
-tf.app.flags.DEFINE_float("learning_rate", 0.01, "Learning rate.")
-tf.app.flags.DEFINE_float("dropout", 0.85, "Fraction of units randomly *NOT* dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_float("learning_rate", 0.0001, "Learning rate.")
+tf.app.flags.DEFINE_float("dropout", 0.55, "Fraction of units randomly *NOT* dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_float("mu", 0.000, "proportion of loss to enforce st < end")
 tf.app.flags.DEFINE_integer("batch_size", 20, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
@@ -40,7 +40,8 @@ tf.app.flags.DEFINE_integer("model_type", 3, "basic: 0, multiperspective: 1, mix
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 tf.app.flags.DEFINE_boolean("clip_gradients",True, "Clip gradients")
-tf.app.flags.DEFINE_float("max_grad_norm", 10., "max grad to clip to")
+tf.app.flags.DEFINE_float("max_grad_norm", 1., "max grad to clip to")
+tf.app.flags.DEFINE_float("exp_reduce", 5.0, "fraction to reduce lr by per epoch")
 
 FLAGS = tf.app.flags.FLAGS
 

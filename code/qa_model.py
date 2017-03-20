@@ -628,6 +628,8 @@ class QASystem(object):
                 shape=())
         self.mu_placeholder = tf.placeholder(tf.float32,
                 shape=())
+        self.lr_placeholder = tf.placeholder(tf.float32,
+                shape=())
         # create boolean masks for softmaxing at end
         self.mask_p_seq = tf.sequence_mask(self.mask_p_placeholder,
                 maxlen=self.max_len_p, dtype=tf.bool)
@@ -804,7 +806,7 @@ class QASystem(object):
                 get_optimizer(self.config.optimizer)
         # TODO: NOT DECAYING LEARNING RATE BC ADAM OPTIMIZER
         #optimizer = optimizer_type(self.lr_exp)
-        optimizer = optimizer_type(self.config.learning_rate)
+        optimizer = optimizer_type(self.lr_placeholder)
         grads_and_vars = optimizer.compute_gradients(self.loss)
 
         if self.config.clip_gradients:
@@ -855,6 +857,7 @@ class QASystem(object):
         #dropout = 1 # TODO: change and move to train.py
         input_feed[self.dropout_placeholder] = dropout
         input_feed[self.mu_placeholder] = mu
+        input_feed[self.lr_placeholder] = self.config.learning_rate
         # logger.info("input_feed_dict {}, {}".format(
         #     len(input_feed), len(input_feed[self.p_placeholder])))
         return input_feed
@@ -1112,14 +1115,17 @@ class QASystem(object):
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
 
         # Lisa
-        best_score = 0.
+        self.best_score = 0.
         train_set, val_set, raw_set = dataset
         logger.info("train_set", len(train_set))
         self.raw_train, self.raw_val = raw_set
         for epoch in range(self.config.epochs):
             logger.info("Epoch %d out of %d", epoch+1, self.config.epochs)
             g = tf.get_default_graph()
-            logger.info("getting default operations")
+            if epoch % 2 == 0 and epoch != 0:
+                # decrease every other epoch?
+                #self.config.learning_rate /= self.config.exp_reduce
+                logger.info("Reducing learning rate: {}".format(self.config.learning_rate))
             def dim_calc(tfshape):
                 is_none = False
                 prod = 1
@@ -1136,8 +1142,8 @@ class QASystem(object):
                         map(lambda v: dim_calc(v.get_shape()),
                                 op.outputs)))
             score = self.run_epoch(sess, train_set, val_set)
-            if score > best_score:
-                best_score = score
+            if score > self.best_score:
+                self.best_score = score
                 logger.info("New best score!")
                 if self.saver:
                     logger.info("Saving model in {}".format(
@@ -1147,9 +1153,6 @@ class QASystem(object):
                                 'model{}.weights'.format(self.config.sessname)),
                             latest_filename='checkpoint{}'.format(
                                 self.config.sessname))
-            if epoch != 0:
-                #self.config.learning_rate /= 2.0
-                logger.info("Reducing learning rate: {}".format(self.config.learning_rate))
     # Lisa
     # from assignment3/ner_model.py
     def run_epoch(self, sess, train_set, dev_set):
@@ -1160,19 +1163,22 @@ class QASystem(object):
             prog.update(i + 1, [("train loss", loss)])
             if i % print_every == 1:
                 logger.info("Current batch:{}/{}, loss: {}, grad norm: {}".format(
-                    i, len(train_set), loss, norms))
+                    i, int(len(train_set)/self.config.batch_size), loss, norms))
                 # logger.info("F1: {}, EM: {}".format(
                 f1, em = self.evaluate_answer(sess, train_set, log=True)
                 logger.info("F1: {}, EM: {}, for {} samples".format(f1, em, 100))
 		# logger.info("hello world")
                 # logger.info("F1: {}, EM: {}".format(
                 # 	self.evaluate_answer(sess, train_set, log=True)))
-                if self.saver:
-                    logger.info("Saving model in {}".format(
-                        self.config.train_dir))
-                    self.saver.save(sess,
-                            os.path.join(self.config.train_dir,
-                                'model{}.weights'.format(self.config.sessname)))
+                if f1 > self.best_score:
+                    logger.info("New best score!")
+                    self.best_score = f1
+                    if self.saver:
+                        logger.info("Saving model in {}".format(
+                            self.config.train_dir))
+                        self.saver.save(sess,
+                                os.path.join(self.config.train_dir,
+                                    'model{}.weights'.format(self.config.sessname)))
         logger.info("")
         f1, em = self.evaluate_answer(sess, train_set, log=True)
         logger.info("After epoch: F1: {}, EM: {}, for {} samples".format(f1, em, 100))
