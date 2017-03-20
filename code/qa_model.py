@@ -706,7 +706,9 @@ class QASystem(object):
             ans_st = tf.argmax(yp_mask,1)
             ans_end = tf.argmax(yp2_mask,1)
             pos_range = (ans_st - ans_end)
-            pos_range = tf.Print(pos_range, [pos_range], message="diff")
+            pos_range = tf.Print(pos_range, [pos_range],
+                    message="diff",
+                    summarize=self.config.batch_size)
             self.loss = tf.reduce_mean(batch_softmax_st + batch_softmax_end) + \
                     self.mu_placeholder * tf.reduce_mean(tf.cast(pos_range, tf.float32))
 
