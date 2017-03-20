@@ -667,7 +667,7 @@ class QASystem(object):
         """
         # (None, max_len_p, hidden_size)
         # returns tuple[fw, bw], not concatenated
-        if self.use_mp:
+        if self.use_mp or self.use_cnn:
             encode_p = self.encoder.mp_filter(self.p_embeddings, self.q_embeddings)
         if not self.use_cnn:
             encode_p, encode_out_p = self.encoder.encode(self.p_embeddings,
@@ -1037,9 +1037,9 @@ class QASystem(object):
             # # logger.info("prediction argmax:({},{})".format(
             # #     a_s[i], a_e[i], get_substring(text_samples[i],
             # #         a_s[i], a_e[i])))
-            # logger.info("prediction:({},{}){}\nactual:({},{}){}".format(
-            #     guess_st[i], guess_end[i],prediction,
-            #     actual_st[i], actual_end[i], actual))
+            logger.info("prediction:({},{}){}\nactual:({},{}){}".format(
+                guess_st[i], guess_end[i],prediction,
+                actual_st[i], actual_end[i], actual))
             f1 += f1_score(prediction, actual)
             em += exact_match_score(prediction, actual)
 
@@ -1173,10 +1173,11 @@ class QASystem(object):
                 except:
                     return str(tfshape)
             if epoch == 0: # only for first epoch
-                for op in g.get_operations():
-                    logger.info("{}, {}".format(op.name,
-                        map(lambda v: dim_calc(v.get_shape()),
-                                op.outputs)))
+                pass
+                # for op in g.get_operations():
+                #     logger.info("{}, {}".format(op.name,
+                #         map(lambda v: dim_calc(v.get_shape()),
+                #                 op.outputs)))
             score = self.run_epoch(sess, train_set, val_set)
             if score > self.best_score:
                 self.best_score = score

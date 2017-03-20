@@ -41,7 +41,7 @@ tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab 
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 tf.app.flags.DEFINE_boolean("clip_gradients",True, "Clip gradients")
 tf.app.flags.DEFINE_float("max_grad_norm", 5., "max grad to clip to")
-tf.app.flags.DEFINE_float("exp_reduce", 5.0, "fraction to reduce lr by per epoch")
+tf.app.flags.DEFINE_float("exp_reduce", 3.0, "fraction to reduce lr by per epoch")
 
 FLAGS = tf.app.flags.FLAGS
 
