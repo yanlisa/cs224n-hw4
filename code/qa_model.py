@@ -80,7 +80,7 @@ class Encoder(object):
 
         return [fw, bw], out_tuple
 
-    def cnn_encode(self, inputs, seq_len, encoder_state_input, reuse=False):
+    def cnn_encode(self, inputs, seq_len, encoder_state_input, reuse=False,dropout=1.0):
         """Calls cnn encoding and does things
         """
         logging.info(">>>cnn encode")
@@ -99,12 +99,12 @@ class Encoder(object):
                     name="kernellayer%d" % idx,
                     padding="SAME")
             # [?, seq_len, 1, num_features]
-            conv_relu = tf.nn.relu(tf.squeeze(conv, [2]))
+            conv_nonlin = tf.nn.tanh(tf.squeeze(conv, [2]))
             logging.info("layer {} conv shape (kernel {}, feature {}): {}".format(
-                idx, kernel_dim, num_features, conv_relu.get_shape()))
+                idx, kernel_dim, num_features, conv_nonlin.get_shape()))
 
             if use_highway[idx]:
-                cnn_output = tf.reshape(conv_relu, [-1, seq_len * num_features])
+                cnn_output = tf.reshape(conv_nonlin, [-1, seq_len * num_features])
                 with tf.variable_scope("highway%d" % idx):
                     highway_layers = 1
                     hw_output = highway(cnn_output, cnn_output.get_shape()[1],
@@ -113,7 +113,7 @@ class Encoder(object):
                 logging.info("conv layer {} final {}".format(idx, hw_output.get_shape()))
                 conv_output = hw_output
             else:
-                conv_output = conv_relu
+                conv_output = conv_nonlin
             layers.append(conv_output)
             input_ = conv_output
         
@@ -132,8 +132,11 @@ class Encoder(object):
         # #     norm_output = bn(tf.expand_dims(tf.expand_dims(cnn_output, 1), 1))
         # #     cnn_output = tf.squeeze(norm_output, [1,2])
 
-        # # use highway, because why not
+        # [?,p_len,p_dim]
         cnn_output = tf.concat(2, layers)
+        # apply dropout
+        cnn_output = tf.nn.dropout(cnn_output, self.dropout_placeholder,
+                noise_shape=[tf.shape(cnn_output)[0],seq_len,1])
         logging.info("final shape of conv {}".format(cnn_output.get_shape()))
         return cnn_output
 
@@ -285,7 +288,8 @@ class Encoder(object):
 
         # modeling
         with tf.variable_scope("bidaf_modeling"):
-            M = self.cnn_encode(G, self.max_len_p, None)
+            M = self.cnn_encode(G, self.max_len_p, None,
+                    dropout=self.dropout_placeholder)
         # cell = tf.nn.rnn_cell.BasicLSTMCell(self.size,
         #                 state_is_tuple=True)
         # cell = tf.nn.rnn_cell.DropoutWrapper(cell,
@@ -558,7 +562,8 @@ class Decoder(object):
             # a_end, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,
             #         sequence_length=masks,
             #         dtype=tf.float32)
-            a_end = self.cnn_encode(knowledge_rep, self.config.output_size, None)
+            a_end = self.cnn_encode(knowledge_rep, self.config.output_size, None,
+                    dropout=self.dropout_placeholder)
             # each of dim [batch_size, max_time, output_size)]
             W_end = tf.get_variable("W_end",
                 (input_size,),
@@ -678,11 +683,13 @@ class QASystem(object):
             logging.info("cnn encode for p")
             with tf.variable_scope("cnn_p"):
                 cnn_p = self.encoder.cnn_encode(self.p_embeddings,
-                    self.max_len_p, None)
+                    self.max_len_p, None,
+                    dropout=self.dropout_placeholder)
             logging.info("cnn encode for q")
             with tf.variable_scope("cnn_q"):
                 cnn_q = self.encoder.cnn_encode(self.q_embeddings,
-                    self.max_len_q, None)
+                    self.max_len_q, None,
+                    dropout=self.dropout_placeholder)
         if self.use_basic or self.use_mix:
             encode_p = tf.concat(2, encode_p)
         if self.use_basic or self.use_mix:
@@ -730,7 +737,7 @@ class QASystem(object):
         elif self.use_cnn:
             self.yp, self.yp2 = self.decoder.mix_decode(encode_context,
                     masks=self.mask_p_placeholder,
-                    input_size=self.config.state_size) # using bidaf modeling: lstm
+                    input_size=self.config.state_size) # using bidaf modeling: cnn
         logger.info("self.yp {}, yp2 {}".format(self.yp, self.yp2))
 
     def exp_mask(self, val, mask):
@@ -1037,9 +1044,9 @@ class QASystem(object):
             # # logger.info("prediction argmax:({},{})".format(
             # #     a_s[i], a_e[i], get_substring(text_samples[i],
             # #         a_s[i], a_e[i])))
-            logger.info("prediction:({},{}){}\nactual:({},{}){}".format(
-                guess_st[i], guess_end[i],prediction,
-                actual_st[i], actual_end[i], actual))
+            # logger.info("prediction:({},{}){}\nactual:({},{}){}".format(
+            #     guess_st[i], guess_end[i],prediction,
+            #     actual_st[i], actual_end[i], actual))
             f1 += f1_score(prediction, actual)
             em += exact_match_score(prediction, actual)
 
@@ -1197,7 +1204,7 @@ class QASystem(object):
         print_every = 50 
         for i, batch in enumerate(minibatches(train_set, self.config.batch_size)):
             loss, norms = self.optimize(sess, batch)
-            prog.update(i + 1, [("train loss", loss)])
+            prog.update(i + 1, [("train loss", loss), ("norms", norms)])
             if i % print_every == 1:
                 logger.info("Current batch:{}/{}, loss: {}, grad norm: {}".format(
                     i, int(len(train_set)/self.config.batch_size), loss, norms))
