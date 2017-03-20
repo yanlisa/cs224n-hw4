@@ -5,12 +5,13 @@ from __future__ import print_function
 import time
 import logging
 import os
+import timeit
 
 import numpy as np
 from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
-from util import Progbar, minibatches, ConfusionMatrix, get_substring
+from util import Progbar, minibatches, ConfusionMatrix, get_substring, secs_to_hms
 from cnn import TDNN
 from cnn.ops import highway, batch_norm, conv2d
 
@@ -90,6 +91,7 @@ class Encoder(object):
 
         kernels = [2,3,4,5,6,7,8,9]
         #kernels = [3,4,5,6]
+        kernels = kernels[:self.config.num_kernels]
         num_features = self.config.state_size/len(kernels) # typically 100/4=25
         use_highway = [False, False, False, False]
         use_highway = [False] * len(kernels)
@@ -555,11 +557,11 @@ class Decoder(object):
                 W_st.get_shape(), knowledge_rep.get_shape()))
             self.y_st = tf.reduce_sum(tf.mul(knowledge_rep, W_st), 2)
 
-        cell = tf.nn.rnn_cell.BasicLSTMCell(input_size,
-                state_is_tuple=True)
-        cell = tf.nn.rnn_cell.DropoutWrapper(cell,
-                input_keep_prob=self.dropout_placeholder,
-                output_keep_prob=self.dropout_placeholder)
+        # cell = tf.nn.rnn_cell.BasicLSTMCell(input_size,
+        #         state_is_tuple=True)
+        # cell = tf.nn.rnn_cell.DropoutWrapper(cell,
+        #         input_keep_prob=self.dropout_placeholder,
+        #         output_keep_prob=self.dropout_placeholder)
         with tf.variable_scope("mix_decode_end"):
             # a_end, _ = tf.nn.dynamic_rnn(cell, knowledge_rep,
             #         sequence_length=masks,
@@ -1188,7 +1190,15 @@ class QASystem(object):
                 #     logger.info("{}, {}".format(op.name,
                 #         map(lambda v: dim_calc(v.get_shape()),
                 #                 op.outputs)))
-            score = self.run_epoch(sess, train_set, val_set)
+            def wrapper_(sess, train_set, val_set):
+                def wrapped_():
+                    return self.run_epoch(sess, train_set, val_set)
+                return wrapped_
+            epoch_wrapper = wrapper_(sess, train_set, val_set)
+            epoch_time = timeit.timeit(epoch_wrapper,number=1)
+            logger.info(">>>> Epoch {} time: {}".format(epoch, secs_to_hms(epoch_time)))
+            #score = self.run_epoch(sess, train_set, val_set)
+            score = self.stashed_score
             if score > self.best_score:
                 self.best_score = score
                 logger.info("New best score!")
@@ -1203,11 +1213,16 @@ class QASystem(object):
     # Lisa
     # from assignment3/ner_model.py
     def run_epoch(self, sess, train_set, dev_set):
+        start_time = time.time()
         prog = Progbar(target=1 + int(len(train_set) / self.config.batch_size))
         print_every = 50 
         for i, batch in enumerate(minibatches(train_set, self.config.batch_size)):
             loss, norms, norm_var = self.optimize(sess, batch)
-            prog.update(i + 1, [("train loss", loss), ("norms", norms), ("norm/var", norm_var)])
+            prog.update(i + 1, values=[("avg loss", loss)],
+                    exact=[("curr loss", loss),
+                           ("norms", "{}({})".format(norms, norm_var)),
+                           ("time elapsed",
+                        str(secs_to_hms(time.time() - start_time)) )])
             if i % print_every == 1:
                 logger.info("Current batch:{}/{}, loss: {}, grad norm: {}".format(
                     i, int(len(train_set)/self.config.batch_size), loss, norms))
@@ -1236,4 +1251,5 @@ class QASystem(object):
         # TODO: implement validation on dev set.
         # from ner_model.py: self.evaluate(sess, dev_set)
         # here: test() or validate()
+        self.stashed_score = f1
         return f1

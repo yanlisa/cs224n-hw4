@@ -307,7 +307,8 @@ class Progbar(object):
         for k, v in exact:
             if k not in self.sum_values:
                 self.unique_values.append(k)
-            self.sum_values[k] = [v, 1]
+            #self.sum_values[k] = [v, 1]
+            self.sum_values[k] = v
         self.seen_so_far = current
 
         now = time.time()
@@ -507,3 +508,8 @@ def preprocess_data(dataset, dataset_str, max_len_p, max_len_q):
     if ans:
         ans = truncate_answers(ans, max_len_p)
     return padded_p, mask_p, padded_q, mask_q, ans
+
+def secs_to_hms(seconds):
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return "%d:%02d:%02d" % (h, m, s)
