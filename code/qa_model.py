@@ -88,9 +88,11 @@ class Encoder(object):
         embedding_size = inputs.get_shape()[-1]
         logging.info("embed size {}, seq len {}".format(embedding_size, seq_len))
 
-        kernels = [3,4,5,6]
+        kernels = [2,3,4,5,6,7,8,9]
+        #kernels = [3,4,5,6]
         num_features = self.config.state_size/len(kernels) # typically 100/4=25
         use_highway = [False, False, False, False]
+        use_highway = [False] * len(kernels)
         input_ = inputs
         layers = []
         for idx, kernel_dim in enumerate(kernels):
@@ -290,7 +292,7 @@ class Encoder(object):
         with tf.variable_scope("bidaf_modeling"):
             M = self.cnn_encode(G, self.max_len_p, None,
                     dropout=self.dropout_placeholder)
-        # cell = tf.nn.rnn_cell.BasicLSTMCell(self.size,
+        # cell = tf.nn.rnn_cell.BasicLSTMCell(self.size/2,
         #                 state_is_tuple=True)
         # cell = tf.nn.rnn_cell.DropoutWrapper(cell,
         #         input_keep_prob=self.dropout_placeholder,
@@ -298,8 +300,8 @@ class Encoder(object):
         # with tf.variable_scope("bidaf_modeling"):
         #     (fw, bw), _ = tf.nn.bidirectional_dynamic_rnn(cell, cell,
         #             G, sequence_length=p_mask, dtype=tf.float32)
+        #     M = tf.concat(2, [fw, bw])
 
-        # M = tf.concat(2, [fw, bw])
         logging.info("M {}".format(M.get_shape()))
         return M
 
@@ -826,8 +828,9 @@ class QASystem(object):
             grads_and_vars = zip(grads, and_vars)
 
         self.grad_norm = tf.global_norm(grads_and_vars)
+        self.grad_norm_var = self.grad_norm / len(grads_and_vars)
         self.grad_norm = tf.Print(self.grad_norm,
-                [self.grad_norm], message="grad norm:")
+                [self.grad_norm, self.grad_norm_var, len(grads_and_vars)], message="grad norm:")
         self.train_op = optimizer.apply_gradients(grads_and_vars)
                 #global_step=self.global_step)
 
@@ -884,14 +887,14 @@ class QASystem(object):
                 mu=self.config.mu)
 
         #run_metadata = tf.Print(run_metadata, [run_metadata])
-        output_feed = [self.train_op, self.loss, self.grad_norm]
+        output_feed = [self.train_op, self.loss, self.grad_norm, self.grad_norm_var]
 
-        outputs = sess.run(output_feed, input_feed,
-                options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE,
-                    output_partition_graphs=True))
-        _, loss, norms = outputs
+        outputs = sess.run(output_feed, input_feed)
+                # options=tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE,
+                #     output_partition_graphs=True))
+        _, loss, norms, norm_var = outputs
 
-        return loss, norms
+        return loss, norms, norm_var
 
     def decode(self, sess, test_x):
         """
@@ -1203,8 +1206,8 @@ class QASystem(object):
         prog = Progbar(target=1 + int(len(train_set) / self.config.batch_size))
         print_every = 50 
         for i, batch in enumerate(minibatches(train_set, self.config.batch_size)):
-            loss, norms = self.optimize(sess, batch)
-            prog.update(i + 1, [("train loss", loss), ("norms", norms)])
+            loss, norms, norm_var = self.optimize(sess, batch)
+            prog.update(i + 1, [("train loss", loss), ("norms", norms), ("norm/var", norm_var)])
             if i % print_every == 1:
                 logger.info("Current batch:{}/{}, loss: {}, grad norm: {}".format(
                     i, int(len(train_set)/self.config.batch_size), loss, norms))
