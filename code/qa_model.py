@@ -80,7 +80,7 @@ class Encoder(object):
 
         return [fw, bw], out_tuple
 
-    def cnn_encode(self, inputs, masks, seq_len, encoder_state_input, reuse=False):
+    def cnn_encode(self, inputs, seq_len, encoder_state_input, reuse=False):
         """Calls cnn encoding and does things
         """
         logging.info(">>>cnn encode")
@@ -89,7 +89,7 @@ class Encoder(object):
         logging.info("embed size {}, seq len {}".format(embedding_size, seq_len))
 
         kernels = [3,4,5,6]
-        num_features = 25
+        num_features = self.config.state_size/len(kernels) # typically 100/4=25
         use_highway = [False, False, False, False]
         input_ = inputs
         layers = []
@@ -232,6 +232,72 @@ class Encoder(object):
             cc_rs_W = tf.matmul(cc_rs, W_1)
             p_attn = tf.reshape(cc_rs_W, [-1, self.max_len_p, self.size]) + b_1
         return p_attn
+
+    def bidaf_attention(self, p_context, q_query, p_size=-1, q_size=-1,
+            p_mask=None):
+        if p_size == -1:
+            p_size = 2*self.size
+        if q_size == -1:
+            q_size = 2*self.size
+        # note if both are using cnn, then they are the same size (self.config.state_size)
+        logging.info(">>>bidaf_attention")
+        xavier_initializer = tf.contrib.layers.xavier_initializer()
+        # S = [?,p_len,q_len]
+        # U: [?,q_len,q_dim], H: [?,p_len,p_dim]
+        # S: [?,p_len,p_dim] x [p_dim, q_dim] x [?,q_len,q_dim]
+        with tf.variable_scope("bidaf_flow"):
+            W_pq = tf.get_variable("W_pq",
+                    shape=(q_size, p_size),
+                    initializer=xavier_initializer)
+            q_reshape = tf.reshape(q_query, [-1, q_size])
+            # [?, q_len, q_dim] --> [?, q_len, p_dim]
+            wq = tf.matmul(q_reshape, W_pq)
+            # [?, q_len, p_dim] --> [?, p_dim, q_len]
+            wq = tf.transpose(tf.reshape(wq, [-1, self.max_len_q, p_size]), [0,2,1])
+            # [?, p_len, q_len]
+            S = tf.batch_matmul(p_context, wq)
+            logging.info("S shape {}".format(S.get_shape()))
+
+        # context to query
+        a = tf.nn.softmax(S) # softmax across queries for given word
+        # [?, p_len, q_dim]
+        U_tilde = tf.batch_matmul(a, q_query)
+        logging.info("U tilde {}".format(U_tilde.get_shape()))
+
+        # query to context
+        b = tf.nn.softmax(tf.reduce_max(S, 2)) # [?,p_len]
+        logging.info("b {}".format(b.get_shape()))
+        b = tf.expand_dims(b, 2) # [?,p_len,1]
+        # [?,p_dim]
+        h_tilde = tf.reduce_sum(tf.mul(p_context, b), 1)
+        logging.info("h_tilde {}".format(h_tilde.get_shape()))
+        # [?,p_len,p_dim]
+        h_tilde = tf.expand_dims(h_tilde, 1)
+        H_tilde = tf.tile(h_tilde, [1,self.max_len_p,1])
+        logging.info("H_tilde {}".format(H_tilde.get_shape()))
+
+        # [?,p_len,4*p_dim]
+        G = tf.concat(2, [p_context, # h
+                          U_tilde, # u_tilde
+                          tf.mul(p_context, U_tilde), # h * u_tilde
+                          tf.mul(p_context, H_tilde)])
+        logging.info("G {}".format(G.get_shape()))
+
+        # modeling
+        with tf.variable_scope("bidaf_modeling"):
+            M = self.cnn_encode(G, self.max_len_p, None)
+        # cell = tf.nn.rnn_cell.BasicLSTMCell(self.size,
+        #                 state_is_tuple=True)
+        # cell = tf.nn.rnn_cell.DropoutWrapper(cell,
+        #         input_keep_prob=self.dropout_placeholder,
+        #         output_keep_prob=self.dropout_placeholder)
+        # with tf.variable_scope("bidaf_modeling"):
+        #     (fw, bw), _ = tf.nn.bidirectional_dynamic_rnn(cell, cell,
+        #             G, sequence_length=p_mask, dtype=tf.float32)
+
+        # M = tf.concat(2, [fw, bw])
+        logging.info("M {}".format(M.get_shape()))
+        return M
 
     def mp_attention(self, p_context, q_query, q_out):
         logging.info(">>>mp_attention")
@@ -469,19 +535,21 @@ class Decoder(object):
 
         return (self.y_st, self.y_end)
 
-    def mix_decode(self, knowledge_rep,masks=None):
+    def mix_decode(self, knowledge_rep,masks=None,input_size=-1):
+        if input_size == -1:
+            input_size = self.config.state_size
         logging.info(">>>mix decode")
         # 2 for either st or end
         xavier_initializer = tf.contrib.layers.xavier_initializer()
         with tf.variable_scope("mix_decode_st"):
             W_st = tf.get_variable("W_st",
-                (self.config.state_size,),
+                (input_size,),
                 initializer=xavier_initializer)
             logger.info("W_st {}, p {}".format(
                 W_st.get_shape(), knowledge_rep.get_shape()))
             self.y_st = tf.reduce_sum(tf.mul(knowledge_rep, W_st), 2)
 
-        cell = tf.nn.rnn_cell.BasicLSTMCell(self.config.state_size,
+        cell = tf.nn.rnn_cell.BasicLSTMCell(input_size,
                 state_is_tuple=True)
         cell = tf.nn.rnn_cell.DropoutWrapper(cell,
                 input_keep_prob=self.dropout_placeholder,
@@ -492,7 +560,7 @@ class Decoder(object):
                     dtype=tf.float32)
             # each of dim [batch_size, max_time, output_size)]
             W_end = tf.get_variable("W_end",
-                (self.config.state_size,),
+                (input_size,),
                 initializer=xavier_initializer)
             logger.info("W_end {}, a_end{}".format(
                 W_end.get_shape(), a_end.get_shape()))
@@ -606,11 +674,11 @@ class QASystem(object):
             logging.info("cnn encode for p")
             with tf.variable_scope("cnn_p"):
                 cnn_p = self.encoder.cnn_encode(self.p_embeddings,
-                    self.mask_p_placeholder, self.max_len_p, None)
+                    self.max_len_p, None)
             logging.info("cnn encode for q")
             with tf.variable_scope("cnn_q"):
                 cnn_q = self.encoder.cnn_encode(self.q_embeddings,
-                    self.mask_q_placeholder, self.max_len_q, None)
+                    self.max_len_q, None)
         if self.use_basic or self.use_mix:
             encode_p = tf.concat(2, encode_p)
         if self.use_basic or self.use_mix:
@@ -628,8 +696,11 @@ class QASystem(object):
         elif self.use_mix:
             attn_p = self.encoder.mix_attention(encode_p, encode_q)
         elif self.use_cnn:
-            attn_p = self.encoder.mix_attention(encode_p, encode_q,
-                    p_size=self.config.state_size)
+            # attn_p = self.encoder.mix_attention(encode_p, encode_q,
+            #         p_size=self.config.state_size)
+            attn_p = self.encoder.bidaf_attention(encode_p, encode_q,
+                    p_size=self.config.state_size, q_size=self.config.state_size,
+                    p_mask=self.mask_p_placeholder)
             # attn_p = self.encoder.cnn_attention(encode_p, 
             #         self.mask_p_placeholder, cnn_q)
         logger.info("attn_p {}".format(attn_p.get_shape()))
@@ -649,9 +720,13 @@ class QASystem(object):
         elif self.use_mp:
             self.yp, self.yp2 = self.decoder.mp_decode(encode_context,
                     masks=self.mask_p_placeholder) # start, end
-        elif self.use_mix or self.use_cnn:
+        elif self.use_mix:
             self.yp, self.yp2 = self.decoder.mix_decode(encode_context,
-                    masks=self.mask_p_placeholder) # start, end
+                    masks=self.mask_p_placeholder)
+        elif self.use_cnn:
+            self.yp, self.yp2 = self.decoder.mix_decode(encode_context,
+                    masks=self.mask_p_placeholder,
+                    input_size=self.config.state_size) # using bidaf modeling: lstm
         logger.info("self.yp {}, yp2 {}".format(self.yp, self.yp2))
 
     def exp_mask(self, val, mask):
@@ -1073,7 +1148,7 @@ class QASystem(object):
                             latest_filename='checkpoint{}'.format(
                                 self.config.sessname))
             if epoch != 0:
-                self.config.learning_rate /= 2.0
+                #self.config.learning_rate /= 2.0
                 logger.info("Reducing learning rate: {}".format(self.config.learning_rate))
     # Lisa
     # from assignment3/ner_model.py
