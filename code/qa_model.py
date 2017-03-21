@@ -1209,7 +1209,7 @@ class QASystem(object):
         for epoch in range(self.config.epochs):
             logger.info("Epoch %d out of %d", epoch+1, self.config.epochs)
             g = tf.get_default_graph()
-            if epoch % 2 == 0 and epoch != 0:
+            if epoch % self.config.reduce_every == 0 and epoch != 0:
                 # decrease every other epoch?
                 self.config.learning_rate /= self.config.exp_reduce
                 logger.info("Reducing learning rate: {}".format(self.config.learning_rate))

@@ -44,6 +44,7 @@ tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the 
 tf.app.flags.DEFINE_boolean("clip_gradients",True, "Clip gradients")
 tf.app.flags.DEFINE_float("max_grad_norm", 5., "max grad to clip to")
 tf.app.flags.DEFINE_float("exp_reduce", 5.0, "fraction to reduce lr by per epoch")
+tf.app.flags.DEFINE_float("reduce_every", 4, "reduce every x epochs")
 
 FLAGS = tf.app.flags.FLAGS
 
