@@ -26,7 +26,7 @@ tf.app.flags.DEFINE_integer("batch_size", 20, "Batch size to use during training
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("output_size", 500, "The output size of your model.")
-tf.app.flags.DEFINE_integer("num_kernels", 4, "The number of kernels to use for cnn.")
+tf.app.flags.DEFINE_integer("num_kernels", 8, "The number of kernels to use for cnn.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_integer("perspective_size", 50, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")

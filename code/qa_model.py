@@ -81,9 +81,16 @@ class Encoder(object):
 
         return [fw, bw], out_tuple
 
-    def cnn_encode(self, inputs, seq_len, encoder_state_input, reuse=False,dropout=1.0):
+    def cnn_encode(self, inputs, seq_len, encoder_state_input,
+            reuse=False,dropout=1.0,
+            num_kernels=-1,
+            output_size=-1):
         """Calls cnn encoding and does things
         """
+        if num_kernels == -1:
+            num_kernels = self.config.num_kernels
+        if output_size == -1:
+            output_size = self.config.state_size
         logging.info(">>>cnn encode")
         # [?, seq_len, embedding_size] (all padded)
         embedding_size = inputs.get_shape()[-1]
@@ -91,19 +98,25 @@ class Encoder(object):
 
         kernels = [2,3,4,5,6,7,8,9]
         #kernels = [3,4,5,6]
-        kernels = kernels[:self.config.num_kernels]
-        num_features = self.config.state_size/len(kernels) # typically 100/4=25
+        kernels = kernels[:num_kernels]
+        num_features = output_size/len(kernels) # typically 100/4=25
         use_highway = [False, False, False, False]
         use_highway = [False] * len(kernels)
         input_ = inputs
         layers = []
+        bn = batch_norm()
+
         for idx, kernel_dim in enumerate(kernels):
             input_ = tf.expand_dims(inputs,-1)
             conv = conv2d(input_,num_features, kernel_dim, embedding_size,
                     name="kernellayer%d" % idx,
                     padding="SAME")
+            # apply dropout
+            #conv = tf.nn.dropout
             # [?, seq_len, 1, num_features]
-            conv_nonlin = tf.nn.tanh(tf.squeeze(conv, [2]))
+            bn_output = bn(tf.squeeze(conv,[2]))
+            conv_nonlin = tf.nn.tanh(bn_output)
+            #conv_nonlin = tf.nn.tanh(tf.squeeze(conv, [2]))
             logging.info("layer {} conv shape (kernel {}, feature {}): {}".format(
                 idx, kernel_dim, num_features, conv_nonlin.get_shape()))
 
@@ -139,8 +152,8 @@ class Encoder(object):
         # [?,p_len,p_dim]
         cnn_output = tf.concat(2, layers)
         # apply dropout
-        cnn_output = tf.nn.dropout(cnn_output, self.dropout_placeholder,
-                noise_shape=[tf.shape(cnn_output)[0],seq_len,1])
+        # cnn_output = tf.nn.dropout(cnn_output, self.dropout_placeholder,
+        #         noise_shape=[tf.shape(cnn_output)[0],seq_len,1])
         logging.info("final shape of conv {}".format(cnn_output.get_shape()))
         return cnn_output
 
@@ -291,18 +304,38 @@ class Encoder(object):
         logging.info("G {}".format(G.get_shape()))
 
         # modeling
-        with tf.variable_scope("bidaf_modeling"):
-            M = self.cnn_encode(G, self.max_len_p, None,
-                    dropout=self.dropout_placeholder)
-        # cell = tf.nn.rnn_cell.BasicLSTMCell(self.size/2,
-        #                 state_is_tuple=True)
-        # cell = tf.nn.rnn_cell.DropoutWrapper(cell,
-        #         input_keep_prob=self.dropout_placeholder,
-        #         output_keep_prob=self.dropout_placeholder)
-        # with tf.variable_scope("bidaf_modeling"):
-        #     (fw, bw), _ = tf.nn.bidirectional_dynamic_rnn(cell, cell,
-        #             G, sequence_length=p_mask, dtype=tf.float32)
-        #     M = tf.concat(2, [fw, bw])
+        use_bidaf_cnn = True
+        use_bidaf_cnn = False
+        if use_bidaf_cnn:
+            with tf.variable_scope("bidaf_modeling"):
+                M = self.cnn_encode(G, self.max_len_p, None,
+                        dropout=self.dropout_placeholder)
+        else: # use lstm
+
+            # half the output size bc concatenating later
+            cell = tf.nn.rnn_cell.BasicLSTMCell(self.size/2,
+                            state_is_tuple=True)
+            cell = tf.nn.rnn_cell.DropoutWrapper(cell,
+                    input_keep_prob=self.dropout_placeholder,
+                    output_keep_prob=self.dropout_placeholder)
+            with tf.variable_scope("bidaf_modeling"):
+                W_reduce = tf.get_variable("W_reduce", # forward
+                    shape=(4*p_size, self.size),
+                    initializer=xavier_initializer)
+                b_reduce = tf.get_variable("b_reduce",
+                    shape=(self.size),
+                    initializer=tf.constant_initializer(0))
+
+                G_reshape = tf.reshape(G, [-1, 4*p_size])
+                G_reduce = tf.reshape(tf.matmul(G_reshape, W_reduce),
+                        [-1, self.max_len_p,self.size]) +  \
+                            b_reduce
+                logging.info("G before: {}, G after: {}".format(
+                    G.get_shape(), G_reduce.get_shape()))
+
+                (fw, bw), _ = tf.nn.bidirectional_dynamic_rnn(cell, cell,
+                        G_reduce, sequence_length=p_mask, dtype=tf.float32)
+                M = tf.concat(2, [fw, bw])
 
         logging.info("M {}".format(M.get_shape()))
         return M
@@ -1196,12 +1229,12 @@ class QASystem(object):
                 return wrapped_
             epoch_wrapper = wrapper_(sess, train_set, val_set)
             epoch_time = timeit.timeit(epoch_wrapper,number=1)
-            logger.info(">>>> Epoch {} time: {}".format(epoch, secs_to_hms(epoch_time)))
+            logger.info(">>>> Epoch {} time: {}".format(epoch+1, secs_to_hms(epoch_time)))
             #score = self.run_epoch(sess, train_set, val_set)
             score = self.stashed_score
             if score > self.best_score:
                 self.best_score = score
-                logger.info("New best score!")
+                logger.info("New best score! (Epoch {})".format(epoch+1))
                 if self.saver:
                     logger.info("Saving model in {}".format(
                         self.config.train_dir))
