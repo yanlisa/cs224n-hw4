@@ -55,9 +55,9 @@ class batch_norm(object):
 
     with tf.variable_scope('%s%s' % (self.name, name)) as scope:
       # the "channels" are the words here, right...
-      self.gamma = tf.get_variable("gamma", [1, shape[1], 1, 1],
+      self.gamma = tf.get_variable("gamma", shape[-1],
           initializer=tf.random_normal_initializer(1., 0.02))
-      self.beta = tf.get_variable("beta", [1, shape[1], 1, 1],
+      self.beta = tf.get_variable("beta", shape[-1],
           initializer=tf.constant_initializer(0.))
 
       # # [?, seq_len, num_features)
@@ -67,7 +67,7 @@ class batch_norm(object):
       # return tf.nn.batch_normalization(x, mean, variance,
       #         self.beta, self.gamma,self.epsilon)
       #mean, variance = tf.nn.moments(x, [0, 1, 2])
-      mean, variance = tf.nn.moments(x, [0, 2, 3], keep_dims=True)
+      mean, variance = tf.nn.moments(x, [0, 1, 2], keep_dims=True)
 
       return tf.nn.batch_norm_with_global_normalization(
          x, mean, variance, self.beta, self.gamma, self.epsilon,
