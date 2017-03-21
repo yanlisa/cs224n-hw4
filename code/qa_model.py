@@ -810,17 +810,17 @@ class QASystem(object):
             #         summarize=self.config.batch_size)
 
             # mask
-            yp_mask = self.exp_mask(self.yp, self.mask_p_seq)
-            yp2_mask = self.exp_mask(self.yp2, self.mask_p_seq)
-            logging.info("yp shape{}".format(yp_mask.get_shape()))
+            self.yp_mask = self.exp_mask(self.yp, self.mask_p_seq)
+            self.yp2_mask = self.exp_mask(self.yp2, self.mask_p_seq)
+            logging.info("yp shape{}".format(self.yp_mask.get_shape()))
             # TODO:ignore mask
             # yp_mask = self.yp
             # yp2_mask = self.yp2
-            yp_mask = tf.Print(yp_mask, [tf.argmax(yp_mask, 1)],
+            yp_mask = tf.Print(self.yp_mask, [tf.argmax(self.yp_mask, 1)],
                     message="guessed starts",
                     summarize=self.config.batch_size)
 
-            yp2_mask = tf.Print(yp2_mask, [tf.argmax(yp2_mask, 1)],
+            yp2_mask = tf.Print(self.yp2_mask, [tf.argmax(self.yp2_mask, 1)],
                     message="guessed ends",
                     summarize=self.config.batch_size)
 
@@ -954,7 +954,9 @@ class QASystem(object):
         # output_feed = [self.train_op, self.loss]
         # _, inds = sess.run(output_feed, input_feed)
 
-        output_feed = [self.decoder.y_st, self.decoder.y_end]
+        #output_feed = [self.decoder.y_st, self.decoder.y_end]
+        output_feed = [tf.nn.softmax(self.yp_mask),
+                tf.nn.softmax(self.yp2_mask)]
         y_st, y_end = sess.run(output_feed, input_feed)
 
         return y_st, y_end
@@ -962,27 +964,35 @@ class QASystem(object):
     def answer(self, sess, test_x):
 
         yp, yp2 = self.decode(sess, test_x)
-
         yp_list = (yp).tolist()
         yp2_list = (yp2).tolist()
         batch_size = len(yp_list)
 
         spans = []
         for i in range(len(yp_list)):
-            ypif, yp2if = yp_list[i], yp2_list[i]
-            best_st = 0
-            max_jp = 0 # max joint probability
-            best_span = (0, 1)
-            for j in range(len(ypif)):
-                p_st = ypif[best_st] # the default best prob
-                if ypif[j] > ypif[best_st]:
-                    best_st = j
-                    p_st = ypif[j]
-                p_end = yp2if[j]
-                if p_st * p_end > max_jp:
-                    best_span = (best_st, j+1)
-                    max_jp = p_st * p_end
+            best_span = (0,1)
+            best_prob = 0
+            for j in range(len(yp_list[i])):
+                for k in range(j,len(yp2_list[i])):
+                    cur_prob = yp_list[i][j] * yp2_list[i][k]
+                    if cur_prob > best_prob:
+                        best_prob = cur_prob
+                        best_span = (j,k)
             spans.append(best_span)
+            # ypif, yp2if = yp_list[i], yp2_list[i]
+            # best_st = 0
+            # max_jp = 0 # max joint probability
+            # best_span = (0, 1)
+            # for j in range(len(ypif)):
+            #     p_st = ypif[best_st] # the default best prob
+            #     if ypif[j] > ypif[best_st]:
+            #         best_st = j
+            #         p_st = ypif[j]
+            #     p_end = yp2if[j]
+            #     if p_st * p_end > max_jp:
+            #         best_span = (best_st, j+1)
+            #         max_jp = p_st * p_end
+            # spans.append(best_span)
         return zip(*spans)
 
 
@@ -1085,12 +1095,13 @@ class QASystem(object):
                     guess_st[i], guess_end[i])
             actual = get_substring(text_samples[i],
                     actual_st[i], actual_end[i])
-            # # logger.info("prediction argmax:({},{})".format(
-            # #     a_s[i], a_e[i], get_substring(text_samples[i],
-            # #         a_s[i], a_e[i])))
-            # logger.info("prediction:({},{}){}\nactual:({},{}){}".format(
-            #     guess_st[i], guess_end[i],prediction,
-            #     actual_st[i], actual_end[i], actual))
+            # logger.info("prediction argmax:({},{}, len{}){}".format(
+            #     a_s[i], a_e[i], len(text_samples[i]),
+            #     get_substring(text_samples[i],
+            #         a_s[i], a_e[i])))
+            logger.info("prediction:({},{}){}\nactual:({},{}){}".format(
+                guess_st[i], guess_end[i],prediction,
+                actual_st[i], actual_end[i], actual))
             f1 += f1_score(prediction, actual)
             em += exact_match_score(prediction, actual)
 

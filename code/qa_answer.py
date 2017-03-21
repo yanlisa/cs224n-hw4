@@ -23,14 +23,14 @@ import qa_data
 import logging
 
 logging.basicConfig(level=logging.INFO)
-
 tf.app.flags.DEFINE_float("learning_rate", 0.0001, "Learning rate.")
-tf.app.flags.DEFINE_float("dropout", 0.55, "Fraction of units randomly *NOT* dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_float("dropout", 0.80, "Fraction of units randomly *NOT* dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_float("mu", 0.000, "proportion of loss to enforce st < end")
 tf.app.flags.DEFINE_integer("batch_size", 20, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
-tf.app.flags.DEFINE_integer("state_size", 100, "Size of each model layer.")
+tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("output_size", 500, "The output size of your model.")
+tf.app.flags.DEFINE_integer("num_kernels", 8, "The number of kernels to use for cnn.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_integer("perspective_size", 50, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
@@ -44,10 +44,11 @@ tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicate
 tf.app.flags.DEFINE_integer("model_type", 3, "basic: 0, multiperspective: 1, mix: 2, cnn: 3")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
+tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the JSON dev set to evaluate against (default: ./data/squad/dev-v1.1.json)")
 tf.app.flags.DEFINE_boolean("clip_gradients",True, "Clip gradients")
 tf.app.flags.DEFINE_float("max_grad_norm", 5., "max grad to clip to")
-tf.app.flags.DEFINE_float("exp_reduce", 3.0, "fraction to reduce lr by per epoch")
-tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the JSON dev set to evaluate against (default: ./data/squad/dev-v1.1.json)")
+tf.app.flags.DEFINE_float("exp_reduce", 5.0, "fraction to reduce lr by per epoch")
+tf.app.flags.DEFINE_float("reduce_every", 4, "reduce every x epochs")
 
 # old version
 # tf.app.flags.DEFINE_string("train_dir", "train", "Training directory (default: ./train).")
