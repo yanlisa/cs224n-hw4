@@ -7,10 +7,13 @@ from tensorflow.python.framework import ops
 #from utils import *
 
 def conv2d(input_, output_dim, k_h, k_w,
-           stddev=0.02, name="conv2d",padding="VALID"):
+           stddev=0.02, name="conv2d",padding="VALID",
+           dropout=1.0):
+  xavier_initializer = tf.contrib.layers.xavier_initializer()
   with tf.variable_scope(name):
     w = tf.get_variable('w', [k_h, k_w, input_.get_shape()[-1], output_dim],
-              initializer=tf.truncated_normal_initializer(stddev=stddev))
+              #initializer=tf.truncated_normal_initializer(stddev=stddev))
+              initializer=xavier_initializer)
     if padding == "VALID":
         conv = tf.nn.conv2d(input_, w, strides=[1, 1, 1, 1], padding=padding)
     elif padding == "SAME":
@@ -47,17 +50,25 @@ class batch_norm(object):
       self.ema = tf.train.ExponentialMovingAverage(decay=self.momentum)
       self.name=name
 
-  def __call__(self, x, train=True):
+  def __call__(self, x, name, train=True):
     shape = x.get_shape().as_list()
 
-    with tf.variable_scope(self.name) as scope:
-      self.gamma = tf.get_variable("gamma", [shape[-1]],
+    with tf.variable_scope('%s%s' % (self.name, name)) as scope:
+      # the "channels" are the words here, right...
+      self.gamma = tf.get_variable("gamma", [1, shape[1], 1, 1],
           initializer=tf.random_normal_initializer(1., 0.02))
-      self.beta = tf.get_variable("beta", [shape[-1]],
+      self.beta = tf.get_variable("beta", [1, shape[1], 1, 1],
           initializer=tf.constant_initializer(0.))
 
-      mean, variance = tf.nn.moments(x, [0, 1, 2])
+      # # [?, seq_len, num_features)
+      # mean, variance = tf.nn.moments(x, [2])
+      # logging.info("x shape {}, mean {}, var {}, beta {}".format(
+      #     x.get_shape(), mean.get_shape(), var.get_shape(), beta.get_shape()))
+      # return tf.nn.batch_normalization(x, mean, variance,
+      #         self.beta, self.gamma,self.epsilon)
+      #mean, variance = tf.nn.moments(x, [0, 1, 2])
+      mean, variance = tf.nn.moments(x, [0, 2, 3], keep_dims=True)
 
       return tf.nn.batch_norm_with_global_normalization(
-        x, mean, variance, self.beta, self.gamma, self.epsilon,
-        scale_after_normalization=True)
+         x, mean, variance, self.beta, self.gamma, self.epsilon,
+         scale_after_normalization=True)

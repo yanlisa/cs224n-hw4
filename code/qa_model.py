@@ -104,19 +104,23 @@ class Encoder(object):
         use_highway = [False] * len(kernels)
         input_ = inputs
         layers = []
-        bn = batch_norm()
+        self.bn = batch_norm()
 
         for idx, kernel_dim in enumerate(kernels):
             input_ = tf.expand_dims(inputs,-1)
             conv = conv2d(input_,num_features, kernel_dim, embedding_size,
                     name="kernellayer%d" % idx,
                     padding="SAME")
-            # apply dropout
-            #conv = tf.nn.dropout
+            # order: conv -> batcn norm -> relu -> dropout -> ...
             # [?, seq_len, 1, num_features]
-            bn_output = bn(tf.squeeze(conv,[2]))
+            bn_output = tf.squeeze(self.bn(conv,
+                    name="kernellayer%d" % idx), [2]) #tf.squeeze(conv,[2]))
+            logging.info("bn after {}".format(bn_output.get_shape()))
             conv_nonlin = tf.nn.tanh(bn_output)
             #conv_nonlin = tf.nn.tanh(tf.squeeze(conv, [2]))
+
+            # apply dropout
+            conv_nonlin = tf.nn.dropout(conv_nonlin, dropout)
             logging.info("layer {} conv shape (kernel {}, feature {}): {}".format(
                 idx, kernel_dim, num_features, conv_nonlin.get_shape()))
 
@@ -577,6 +581,8 @@ class Decoder(object):
         return (self.y_st, self.y_end)
 
     def mix_decode(self, knowledge_rep,masks=None,input_size=-1):
+        # dropout on knowledge rep
+        knowledge_rep = tf.nn.dropout(knowledge_rep, self.dropout_placeholder)
         if input_size == -1:
             input_size = self.config.state_size
         logging.info(">>>mix decode")
