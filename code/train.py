@@ -20,7 +20,7 @@ logger.setLevel(logging.DEBUG)
 logging.basicConfig(format='%s(levelname)s:%s(message)s', level=logging.INFO)
 
 tf.app.flags.DEFINE_float("learning_rate", 0.0001, "Learning rate.")
-tf.app.flags.DEFINE_float("dropout", 0.80, "Fraction of units randomly *NOT* dropped on non-recurrent connections.")
+tf.app.flags.DEFINE_float("dropout", 0.50, "Fraction of units randomly *NOT* dropped on non-recurrent connections.")
 tf.app.flags.DEFINE_float("mu", 0.000, "proportion of loss to enforce st < end")
 tf.app.flags.DEFINE_integer("batch_size", 20, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
@@ -37,10 +37,9 @@ tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (
 tf.app.flags.DEFINE_string("optimizer", "adam", "adam / sgd")
 tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per print.")
 tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicates keep all.")
-tf.app.flags.DEFINE_integer("model_type", 3, "basic: 0, multiperspective: 1, mix: 2, cnn: 3")
+tf.app.flags.DEFINE_integer("model_type", 3, "basic: 0, multiperspective: 1, mix: 2, cnn: 3, bidaf: 4")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
-tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the JSON dev set to evaluate against (default: ./data/squad/dev-v1.1.json)")
 tf.app.flags.DEFINE_boolean("clip_gradients",True, "Clip gradients")
 tf.app.flags.DEFINE_float("max_grad_norm", 5., "max grad to clip to")
 tf.app.flags.DEFINE_float("exp_reduce", 5.0, "fraction to reduce lr by per epoch")
@@ -112,6 +111,7 @@ def main(_):
     max_len_p = max(max(map(len, train_p)), max(map(len, val_p)))
     max_len_p = FLAGS.output_size # truncate
     max_len_q = max(max(map(len, train_q)), max(map(len, val_q)))
+    max_len_q = 60 # truncate in case things go awry...
     max_len_ans = max(map(len, train_ans)) # 2
 
     train_padded_p, train_mask_p, train_padded_q, train_mask_q, train_ans = \

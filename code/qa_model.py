@@ -49,7 +49,7 @@ class Encoder(object):
 
         # initialize variables here?
 
-    def encode(self, inputs, masks, encoder_state_input, reuse=False):
+    def encode(self, inputs, masks, encoder_state_input, new_size=-1, reuse=False):
         """
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
@@ -65,9 +65,11 @@ class Encoder(object):
                  or both.
         """
         logging.info(">>>bilstm encode")
+        if new_size == -1:
+            new_size = self.size
         # initial_state_fw, initial_state_bw
         # time_major=False: [batch_size, max_time, cell_fw.output_size]
-        cell = tf.nn.rnn_cell.BasicLSTMCell(self.size,
+        cell = tf.nn.rnn_cell.BasicLSTMCell(new_size,
                         state_is_tuple=True)
         cell = tf.nn.rnn_cell.DropoutWrapper(cell,
                 input_keep_prob=self.dropout_placeholder,
@@ -84,7 +86,8 @@ class Encoder(object):
     def cnn_encode(self, inputs, seq_len, encoder_state_input,
             reuse=False,dropout=1.0,
             num_kernels=-1,
-            output_size=-1):
+            output_size=-1,
+            use_bn=False):
         """Calls cnn encoding and does things
         """
         if num_kernels == -1:
@@ -113,9 +116,12 @@ class Encoder(object):
                     padding="SAME")
             # order: conv -> batcn norm -> relu -> dropout -> ...
             # [?, seq_len, 1, num_features]
-            bn_output = tf.squeeze(self.bn(conv,
-                    name="kernellayer%d" % idx), [2]) #tf.squeeze(conv,[2]))
-            logging.info("bn after {}".format(bn_output.get_shape()))
+            if use_bn:
+                bn_output = tf.squeeze(self.bn(conv,
+                        name="kernellayer%d" % idx), [2]) #tf.squeeze(conv,[2]))
+                logging.info("bn after {}".format(bn_output.get_shape()))
+            else:
+                bn_output = tf.squeeze(conv, [2])
             conv_nonlin = tf.nn.tanh(bn_output)
             #conv_nonlin = tf.nn.tanh(tf.squeeze(conv, [2]))
 
@@ -309,11 +315,12 @@ class Encoder(object):
 
         # modeling
         use_bidaf_cnn = True
-        use_bidaf_cnn = False
+        #use_bidaf_cnn = False
         if use_bidaf_cnn:
             with tf.variable_scope("bidaf_modeling"):
                 M = self.cnn_encode(G, self.max_len_p, None,
-                        dropout=self.dropout_placeholder)
+                        dropout=self.dropout_placeholder,
+                        use_bn=True)
         else: # use lstm
 
             # half the output size bc concatenating later
@@ -694,6 +701,7 @@ class QASystem(object):
         self.use_mp = self.config.model_type == 1
         self.use_mix = self.config.model_type == 2
         self.use_cnn = self.config.model_type == 3
+        self.use_bidaf = self.config.model_type == 4
 
         # ==== assemble pieces ====
         with tf.variable_scope("qa", initializer=tf.uniform_unit_scaling_initializer(1.0)):
@@ -717,11 +725,16 @@ class QASystem(object):
         # returns tuple[fw, bw], not concatenated
         if self.use_mp or self.use_cnn:
             encode_p = self.encoder.mp_filter(self.p_embeddings, self.q_embeddings)
-        if not self.use_cnn:
+        if not self.use_cnn and not self.use_bidaf:
             encode_p, encode_out_p = self.encoder.encode(self.p_embeddings,
                     self.mask_p_placeholder, None)
             encode_q, encode_out_q = self.encoder.encode(self.q_embeddings,
                 self.mask_q_placeholder, None, reuse=True)
+        if self.use_bidaf:
+            encode_p, encode_out_p = self.encoder.encode(self.p_embeddings,
+                    self.mask_p_placeholder, None, new_size=self.config.state_size/2)
+            encode_q, encode_out_q = self.encoder.encode(self.q_embeddings,
+                self.mask_q_placeholder, None, new_size=self.config.state_size/2,reuse=True)
         if self.use_cnn:
             logging.info("cnn encode for p")
             with tf.variable_scope("cnn_p"):
@@ -733,9 +746,9 @@ class QASystem(object):
                 cnn_q = self.encoder.cnn_encode(self.q_embeddings,
                     self.max_len_q, None,
                     dropout=self.dropout_placeholder)
-        if self.use_basic or self.use_mix:
+        if self.use_basic or self.use_mix or self.use_bidaf:
             encode_p = tf.concat(2, encode_p)
-        if self.use_basic or self.use_mix:
+        if self.use_basic or self.use_mix or self.use_bidaf:
             encode_q = tf.concat(2, encode_q)
         if self.use_cnn:
             encode_p = cnn_p
@@ -749,7 +762,7 @@ class QASystem(object):
             attn_p = self.encoder.mp_attention(encode_p, encode_q, encode_out_q)
         elif self.use_mix:
             attn_p = self.encoder.mix_attention(encode_p, encode_q)
-        elif self.use_cnn:
+        elif self.use_cnn or self.use_bidaf:
             # attn_p = self.encoder.mix_attention(encode_p, encode_q,
             #         p_size=self.config.state_size)
             attn_p = self.encoder.bidaf_attention(encode_p, encode_q,
@@ -777,7 +790,7 @@ class QASystem(object):
         elif self.use_mix:
             self.yp, self.yp2 = self.decoder.mix_decode(encode_context,
                     masks=self.mask_p_placeholder)
-        elif self.use_cnn:
+        elif self.use_cnn or self.use_bidaf:
             self.yp, self.yp2 = self.decoder.mix_decode(encode_context,
                     masks=self.mask_p_placeholder,
                     input_size=self.config.state_size) # using bidaf modeling: cnn
@@ -812,7 +825,6 @@ class QASystem(object):
             # mask
             self.yp_mask = self.exp_mask(self.yp, self.mask_p_seq)
             self.yp2_mask = self.exp_mask(self.yp2, self.mask_p_seq)
-            logging.info("yp shape{}".format(self.yp_mask.get_shape()))
             # TODO:ignore mask
             # yp_mask = self.yp
             # yp2_mask = self.yp2
@@ -1083,9 +1095,9 @@ class QASystem(object):
 
 
         # # sanity check with argmax
-        # yp, yp2 = self.decode(sess, samples[:-1])
-        # a_s = np.argmax(yp, axis=1)
-        # a_e = np.argmax(yp2, axis=1)
+        yp, yp2 = self.decode(sess, samples[:-1])
+        a_s = np.argmax(yp, axis=1)
+        a_e = np.argmax(yp2, axis=1)
 
         # does runs
         guess_st, guess_end = self.answer(sess, samples[:-1])
@@ -1099,9 +1111,9 @@ class QASystem(object):
             #     a_s[i], a_e[i], len(text_samples[i]),
             #     get_substring(text_samples[i],
             #         a_s[i], a_e[i])))
-            logger.info("prediction:({},{}){}\nactual:({},{}){}".format(
-                guess_st[i], guess_end[i],prediction,
-                actual_st[i], actual_end[i], actual))
+            # logger.info("prediction:({},{}){}\nactual:({},{}){}".format(
+            #     guess_st[i], guess_end[i],prediction,
+            #     actual_st[i], actual_end[i], actual))
             f1 += f1_score(prediction, actual)
             em += exact_match_score(prediction, actual)
 

@@ -34,7 +34,6 @@ def read_losses(log_fname):
         f1_val = get_nums(f1_str, val_lines, log_lines, delim=delim)
         em_val = get_nums(em_str, val_lines, log_lines, delim=delim)
 
-
     fprefix = log_fname.split('.')[0]
     plot_fig(loss_lines, losses, "loss", fprefix, epoch_lines)
     plot_fig(loss_lines, norms, "global norm", fprefix, epoch_lines)

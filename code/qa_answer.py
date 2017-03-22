@@ -44,7 +44,6 @@ tf.app.flags.DEFINE_integer("keep", 0, "How many checkpoints to keep, 0 indicate
 tf.app.flags.DEFINE_integer("model_type", 3, "basic: 0, multiperspective: 1, mix: 2, cnn: 3")
 tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab file (default: ./data/squad/vocab.dat)")
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
-tf.app.flags.DEFINE_string("dev_path", "data/squad/dev-v1.1.json", "Path to the JSON dev set to evaluate against (default: ./data/squad/dev-v1.1.json)")
 tf.app.flags.DEFINE_boolean("clip_gradients",True, "Clip gradients")
 tf.app.flags.DEFINE_float("max_grad_norm", 5., "max grad to clip to")
 tf.app.flags.DEFINE_float("exp_reduce", 5.0, "fraction to reduce lr by per epoch")
@@ -187,13 +186,16 @@ def generate_answers(sess, model, dataset, rev_vocab):
         all_guess_st += guess_st
         all_guess_end += guess_end
         i_st = i_end # prev
+        # # TODO: REMOVE!!!
+        #if i == 10: break
+
 
     # record wrt uuid
     easy_process = zip(uuid_data, raw_p,
             all_guess_st, all_guess_end)
     for uuid, text, st, end in easy_process:
          answers[uuid] = get_substring(text, st, end)
-    print("answers", answers)
+    #print("answers", answers)
 
     return answers
 
