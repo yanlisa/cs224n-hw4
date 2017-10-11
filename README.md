@@ -20,3 +20,10 @@ Note that you will always want to run your code from this assignment directory, 
 $ python code/train.py
 
 This ensures that any files created in the process don't pollute the code directoy.
+
+# Assignment links
+
+Assignment webpage: [http://web.stanford.edu/class/archive/cs/cs224n/cs224n.1174/assignment4/index.html]
+
+Assignment handout and further code description: [http://web.stanford.edu/class/archive/cs/cs224n/cs224n.1174/assignment4/assignment4.pdf]
+
